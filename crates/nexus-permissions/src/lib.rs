@@ -31,6 +31,14 @@ pub trait PermissionPolicy: Send + Sync {
     fn evaluate(&self, request: &PermissionRequest) -> PermissionDecision;
 }
 
+/// Human or application boundary used when a policy returns `ask`.
+///
+/// The permission crate deliberately does not know whether approval comes from
+/// a CLI prompt, desktop dialog, IDE notification, or remote policy service.
+pub trait PermissionApprover: Send + Sync {
+    fn approve(&self, request: &PermissionRequest) -> bool;
+}
+
 #[derive(Debug, Default)]
 pub struct AskByDefault;
 
@@ -87,6 +95,8 @@ pub enum PermissionError {
     Denied(String),
     #[error("approval required for action: {0}")]
     ApprovalRequired(String),
+    #[error("approval denied for action: {0}")]
+    ApprovalDenied(String),
     #[error("sandbox execution required for action: {0}")]
     SandboxRequired(String),
 }
@@ -103,12 +113,37 @@ pub fn enforce(
     }
 }
 
+pub fn enforce_with_approver(
+    policy: &dyn PermissionPolicy,
+    approver: Option<&dyn PermissionApprover>,
+    request: &PermissionRequest,
+) -> Result<PermissionDecision, PermissionError> {
+    match policy.evaluate(request) {
+        PermissionDecision::Allow => Ok(PermissionDecision::Allow),
+        PermissionDecision::Ask => match approver {
+            Some(approver) if approver.approve(request) => Ok(PermissionDecision::Allow),
+            Some(_) => Err(PermissionError::ApprovalDenied(request.action.clone())),
+            None => Err(PermissionError::ApprovalRequired(request.action.clone())),
+        },
+        PermissionDecision::Deny => Err(PermissionError::Denied(request.action.clone())),
+        PermissionDecision::Sandbox => Err(PermissionError::SandboxRequired(request.action.clone())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        PermissionDecision, PermissionError, PermissionPolicy, PermissionRequest, RuleBasedPolicy,
-        enforce,
+        PermissionApprover, PermissionDecision, PermissionError, PermissionPolicy, PermissionRequest,
+        RuleBasedPolicy, enforce, enforce_with_approver,
     };
+
+    struct StaticApprover(bool);
+
+    impl PermissionApprover for StaticApprover {
+        fn approve(&self, _request: &PermissionRequest) -> bool {
+            self.0
+        }
+    }
 
     #[test]
     fn exact_rule_wins_over_default() {
@@ -135,5 +170,27 @@ mod tests {
             .expect_err("ask must require explicit approval");
 
         assert!(matches!(error, PermissionError::ApprovalRequired(_)));
+    }
+
+    #[test]
+    fn approver_can_allow_asked_action() {
+        let policy = RuleBasedPolicy::new(PermissionDecision::Ask);
+        let request = PermissionRequest::new("shell.execute");
+
+        assert_eq!(
+            enforce_with_approver(&policy, Some(&StaticApprover(true)), &request)
+                .expect("approved action should execute"),
+            PermissionDecision::Allow
+        );
+    }
+
+    #[test]
+    fn approver_can_reject_asked_action() {
+        let policy = RuleBasedPolicy::new(PermissionDecision::Ask);
+        let request = PermissionRequest::new("shell.execute");
+        let error = enforce_with_approver(&policy, Some(&StaticApprover(false)), &request)
+            .expect_err("rejected action should fail");
+
+        assert!(matches!(error, PermissionError::ApprovalDenied(_)));
     }
 }
