@@ -56,8 +56,12 @@ impl ModelCapabilities {
     #[must_use]
     pub const fn with_tool_calling() -> Self {
         Self {
+            chat: true,
+            streaming: false,
             tool_calling: true,
-            ..Self::chat_only()
+            structured_output: false,
+            vision: false,
+            reasoning: false,
         }
     }
 }
