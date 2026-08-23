@@ -45,7 +45,7 @@ impl McpToolAdapter {
     #[must_use]
     pub fn new(command: McpServerCommand, remote: McpTool) -> Self {
         Self {
-            metadata: ToolMetadata { name: format!("mcp.{}", remote.name), description: remote.description },
+            metadata: ToolMetadata { name: format!("mcp.{}", remote.name), description: remote.description, input_schema: remote.input_schema },
             remote_name: remote.name,
             command,
         }

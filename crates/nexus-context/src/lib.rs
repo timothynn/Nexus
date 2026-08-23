@@ -85,7 +85,7 @@ fn build_snapshot(
     model: Option<&str>,
 ) -> Result<ContextSnapshot, ContextError> {
     let mut files = Vec::new();
-    let mut total_estimated_tokens = 0;
+    let mut total_estimated_tokens: usize = 0;
     let mut truncated = false;
     for path in paths.into_iter().take(options.max_files) {
         let bytes = fs::read(&path).map_err(ContextError::Io)?;
