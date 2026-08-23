@@ -1,0 +1,21 @@
+[package]
+name = "nexus-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "nexus-tui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+crossterm.workspace = true
+ratatui.workspace = true
+nexus-agents = { path = "../../crates/nexus-agents" }
+nexus-storage = { path = "../../crates/nexus-storage" }
+
+[lints]
+workspace = true
