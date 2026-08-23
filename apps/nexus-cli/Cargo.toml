@@ -19,6 +19,7 @@ tracing-subscriber.workspace = true
 nexus-config = { path = "../../crates/nexus-config" }
 nexus-models = { path = "../../crates/nexus-models" }
 nexus-runtime = { path = "../../crates/nexus-runtime" }
+nexus-workspace = { path = "../../crates/nexus-workspace" }
 
 [lints]
 workspace = true
