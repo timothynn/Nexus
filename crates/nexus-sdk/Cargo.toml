@@ -1,0 +1,18 @@
+[package]
+name = "nexus-sdk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Public embedding API for the Nexus AI harness"
+
+[dependencies]
+nexus-config = { path = "../nexus-config" }
+nexus-models = { path = "../nexus-models" }
+nexus-runtime = { path = "../nexus-runtime" }
+thiserror.workspace = true
+tokio-util.workspace = true
+
+[lints]
+workspace = true
