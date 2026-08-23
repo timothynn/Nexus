@@ -51,4 +51,4 @@ cargo run -p nexus-cli -- run "inspect this repository"
 - Configurable by default
 - Extensible by design
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+See `docs/` for roadmap and architecture documents (to be added).
