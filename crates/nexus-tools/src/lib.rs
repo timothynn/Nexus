@@ -1,6 +1,10 @@
 //! Tool contracts, registry primitives, and built-in local tools.
 
-use std::{collections::HashMap, path::{Path, PathBuf}, sync::Arc};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -56,11 +60,13 @@ impl ToolRegistry {
 
     pub fn register(&mut self, tool: Arc<dyn Tool>) -> Result<(), ToolError> {
         let name = tool.metadata().name;
-        if self.tools.contains_key(&name) {
-            return Err(ToolError::AlreadyRegistered(name));
+        match self.tools.entry(name) {
+            Entry::Occupied(entry) => Err(ToolError::AlreadyRegistered(entry.key().to_owned())),
+            Entry::Vacant(entry) => {
+                entry.insert(tool);
+                Ok(())
+            }
         }
-        self.tools.insert(name, tool);
-        Ok(())
     }
 
     pub fn get(&self, name: &str) -> Result<Arc<dyn Tool>, ToolError> {
@@ -70,13 +76,21 @@ impl ToolRegistry {
             .ok_or_else(|| ToolError::NotFound(name.to_owned()))
     }
 
-    pub async fn execute(&self, name: &str, request: ToolRequest) -> Result<ToolResponse, ToolError> {
+    pub async fn execute(
+        &self,
+        name: &str,
+        request: ToolRequest,
+    ) -> Result<ToolResponse, ToolError> {
         self.get(name)?.execute(request).await
     }
 
     #[must_use]
     pub fn metadata(&self) -> Vec<ToolMetadata> {
-        let mut metadata = self.tools.values().map(|tool| tool.metadata()).collect::<Vec<_>>();
+        let mut metadata = self
+            .tools
+            .values()
+            .map(|tool| tool.metadata())
+            .collect::<Vec<_>>();
         metadata.sort_by(|left, right| left.name.cmp(&right.name));
         metadata
     }
@@ -96,17 +110,24 @@ impl FileSystemTool {
     fn resolve(&self, requested: &str) -> Result<PathBuf, ToolError> {
         let path = Path::new(requested);
         if path.is_absolute() {
-            return Err(ToolError::InvalidInput("absolute paths are not allowed".to_owned()));
+            return Err(ToolError::InvalidInput(
+                "absolute paths are not allowed".to_owned(),
+            ));
         }
 
-        let root = self.root.canonicalize().map_err(|error| ToolError::Execution(error.to_string()))?;
+        let root = self
+            .root
+            .canonicalize()
+            .map_err(|error| ToolError::Execution(error.to_string()))?;
         let candidate = root.join(path);
         let resolved = candidate
             .canonicalize()
             .map_err(|error| ToolError::Execution(error.to_string()))?;
 
         if !resolved.starts_with(&root) {
-            return Err(ToolError::InvalidInput("path escapes workspace root".to_owned()));
+            return Err(ToolError::InvalidInput(
+                "path escapes workspace root".to_owned(),
+            ));
         }
 
         Ok(resolved)
@@ -172,17 +193,26 @@ mod tests {
         }
 
         async fn execute(&self, request: ToolRequest) -> Result<ToolResponse, ToolError> {
-            Ok(ToolResponse { output: request.input })
+            Ok(ToolResponse {
+                output: request.input,
+            })
         }
     }
 
     #[tokio::test]
     async fn registry_executes_registered_tool() {
         let mut registry = ToolRegistry::new();
-        registry.register(Arc::new(EchoTool)).expect("registration should succeed");
+        registry
+            .register(Arc::new(EchoTool))
+            .expect("registration should succeed");
 
         let response = registry
-            .execute("echo", ToolRequest { input: json!({ "value": 42 }) })
+            .execute(
+                "echo",
+                ToolRequest {
+                    input: json!({ "value": 42 }),
+                },
+            )
             .await
             .expect("execution should succeed");
 
@@ -192,7 +222,12 @@ mod tests {
     #[test]
     fn duplicate_tool_names_are_rejected() {
         let mut registry = ToolRegistry::new();
-        registry.register(Arc::new(EchoTool)).expect("first registration should succeed");
-        assert!(matches!(registry.register(Arc::new(EchoTool)), Err(ToolError::AlreadyRegistered(_))));
+        registry
+            .register(Arc::new(EchoTool))
+            .expect("first registration should succeed");
+        assert!(matches!(
+            registry.register(Arc::new(EchoTool)),
+            Err(ToolError::AlreadyRegistered(_))
+        ));
     }
 }
