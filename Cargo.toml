@@ -8,6 +8,7 @@ members = [
   "crates/nexus-agents",
   "crates/nexus-mcp",
   "crates/nexus-skills",
+  "crates/nexus-plugins",
   "crates/nexus-models",
   "crates/nexus-tools",
   "crates/nexus-permissions",
