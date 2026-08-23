@@ -67,7 +67,10 @@ async fn main() -> Result<()> {
                     })
                     .await?;
 
-                eprintln!("[nexus] run {} completed via {}", result.task_id, result.provider);
+                eprintln!(
+                    "[nexus] run {} completed via {}",
+                    result.task_id, result.provider
+                );
             } else {
                 let result = runtime.run(&task).await?;
                 println!("{}", result.message);
