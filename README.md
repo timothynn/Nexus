@@ -23,11 +23,10 @@ cargo build --workspace
 cargo run -p nexus-cli -- run "inspect this repository"
 ```
 
-For a real provider:
+Launch the interactive operator console:
 
 ```bash
-export OPENAI_API_KEY="..."
-nexus run --provider openai-compatible --model "your-model-id" --tools --session "inspect this repository"
+cargo run -p nexus-tui
 ```
 
 ## Multi-agent orchestration
@@ -77,6 +76,34 @@ Includes bounded concurrency, deterministic task layers, cancellation fan-out, c
 
 ## Phase 4 — Extensibility + Isolation 🚧
 
+### Interactive TUI
+
+`nexus-tui` is now a dedicated terminal operator surface:
+
+```text
+┌ ◈ NEXUS ─────────────────────────────────────────────┐
+│ Run │ Agents │ Context │ Sessions │ Config │ Help     │
+├───────────────┬───────────────────────────────────────┤
+│ Agents        │ Active workspace + live event timeline│
+│ Supervisor    │                                       │
+│ Worker-1      │ run.started                           │
+│ Worker-2      │ system.ready                          │
+│ Reviewer      │ command.queued                        │
+├───────────────┴───────────────────────────────────────┤
+│ > task input                                         │
+└───────────────────────────────────────────────────────┘
+```
+
+Current operator controls:
+
+- `Tab` cycles focus
+- `←` / `→` switches workspace tabs
+- command input queues operator commands into the timeline
+- `Esc` leaves command input
+- `q` exits
+
+The TUI is intentionally a thin operator layer. Its next increment will bind queued commands and `AgentEventSink` directly to live runtime execution rather than reimplementing orchestration.
+
 ### MCP
 
 ```text
@@ -101,29 +128,18 @@ Safe defaults: network disabled, read-only root, explicit workspace mount, confi
 
 ### Plugin runtime and capability enforcement
 
-Plugins now move through a real runtime boundary:
-
 ```text
-.nexus/plugins/<name>/plugin.toml
-        ↓
-Manifest validation
-        ↓
-Declared capability check
-        ↓
-PermissionPolicy decision
-        ↓
-Entrypoint containment validation
-        ↓
-Audited plugin execution
+plugin.toml → declared capability check → PermissionPolicy
+     ↓
+entrypoint containment → audited execution
 ```
-
-A plugin cannot request a capability that was not declared in its manifest. Declared capabilities are then evaluated through the Nexus permission policy before execution. Plugin lifecycle events can be sent to an audit sink for observability.
 
 # 🧬 Architecture
 
 ```text
 apps/
-└── nexus-cli/                 Operator surfaces
+├── nexus-cli/                 Scriptable operator surfaces
+└── nexus-tui/                 Interactive terminal operator console
 
 crates/
 ├── nexus-core/                Stable domain contracts
@@ -159,7 +175,8 @@ crates/
 - [x] Structured run-level observability
 - [x] Container lifecycle management
 - [x] Plugin runtime loading and capability enforcement
-- [ ] Interactive TUI
+- [x] Interactive TUI foundation
+- [ ] Live runtime/event binding for the TUI
 - [ ] Tauri desktop application
 - [ ] Remote workers
 
