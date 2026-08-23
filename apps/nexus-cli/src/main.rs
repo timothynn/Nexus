@@ -694,10 +694,11 @@ async fn main() -> Result<()> {
                     yes,
                 };
                 let scheduler = ParallelAgentScheduler::new(concurrency);
+                let run_name = format!("agents-{}", SessionId::new().0);
                 let outcomes = scheduler
                     .execute(
                         &manager,
-                        "agents-run",
+                        &run_name,
                         count,
                         base.as_deref(),
                         Arc::new(job),
