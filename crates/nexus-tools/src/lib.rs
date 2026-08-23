@@ -20,10 +20,16 @@ pub struct ToolResponse {
     pub output: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolMetadata {
     pub name: String,
     pub description: String,
+    #[serde(default = "default_input_schema")]
+    pub input_schema: Value,
+}
+
+fn default_input_schema() -> Value {
+    json!({ "type": "object" })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,6 +146,14 @@ impl Tool for FileSystemTool {
         ToolMetadata {
             name: "filesystem.read".to_owned(),
             description: "Read a UTF-8 file inside the configured workspace".to_owned(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }),
         }
     }
 
@@ -189,6 +203,10 @@ mod tests {
             ToolMetadata {
                 name: "echo".to_owned(),
                 description: "echoes input".to_owned(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": { "value": {} }
+                }),
             }
         }
 
