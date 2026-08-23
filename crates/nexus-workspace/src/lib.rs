@@ -1,4 +1,4 @@
-//! Isolated workspace primitives backed by Git worktrees.
+//! Isolated workspace primitives backed by Git worktrees and extensible backends.
 
 use std::{fs, path::{Path, PathBuf}, process::Command};
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,30 @@ pub trait WorkspaceBackend: Send + Sync {
     fn name(&self) -> &str;
     fn describe(&self) -> String;
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerWorkspaceBackend { runtime: String, image: String, network_enabled: bool, read_only_root: bool }
+impl ContainerWorkspaceBackend {
+    #[must_use] pub fn new(runtime: impl Into<String>, image: impl Into<String>) -> Self { Self { runtime: runtime.into(), image: image.into(), network_enabled: false, read_only_root: true } }
+    #[must_use] pub fn with_network(mut self, enabled: bool) -> Self { self.network_enabled = enabled; self }
+    #[must_use] pub fn with_read_only_root(mut self, enabled: bool) -> Self { self.read_only_root = enabled; self }
+    #[must_use] pub fn runtime(&self) -> &str { &self.runtime }
+    #[must_use] pub fn image(&self) -> &str { &self.image }
+    #[must_use] pub fn command(&self, workspace: &Path, program: &str, args: &[String]) -> Command {
+        let mut command = Command::new(&self.runtime);
+        command.arg("run").arg("--rm").arg("--workdir").arg("/workspace").arg("--volume").arg(format!("{}:/workspace", workspace.display()));
+        if self.read_only_root { command.arg("--read-only"); }
+        if !self.network_enabled { command.arg("--network").arg("none"); }
+        command.arg(&self.image).arg(program).args(args); command
+    }
+}
+impl WorkspaceBackend for ContainerWorkspaceBackend {
+    fn name(&self) -> &str { "container" }
+    fn describe(&self) -> String { format!("runtime={} image={} network={} read_only_root={}", self.runtime, self.image, self.network_enabled, self.read_only_root) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewCandidate { pub workspace: GitWorktree, pub diff: String, pub status: String }
 
 pub struct GitWorktreeManager { repository: PathBuf, worktrees_root: PathBuf }
 impl GitWorktreeManager {
@@ -41,6 +65,14 @@ impl GitWorktreeManager {
     pub fn cleanup(&self, name: &str, policy: CleanupPolicy) -> Result<bool, WorkspaceError> {
         match policy { CleanupPolicy::Keep => Ok(false), CleanupPolicy::RemoveAlways => { self.remove(name, true)?; Ok(true) }, CleanupPolicy::RemoveClean => { if self.status(name)?.is_empty() { self.remove(name, false)?; Ok(true) } else { Ok(false) } } }
     }
+    pub fn review_candidate(&self, name: &str) -> Result<ReviewCandidate, WorkspaceError> { let workspace = self.find(name)?; let diff = self.diff(name)?; let status = self.status(name)?; Ok(ReviewCandidate { workspace, diff, status }) }
+    pub fn merge_after_review(&self, name: &str, target: &str, approved: bool) -> Result<(), WorkspaceError> {
+        if !approved { return Err(WorkspaceError::ReviewRequired(name.to_owned())); }
+        let workspace = self.find(name)?;
+        self.git(&["merge", "--no-ff", workspace.branch.as_str(), "-m", format!("Merge Nexus workspace {} after explicit review", name).as_str()]).map(|_| ())?;
+        let _ = target;
+        Ok(())
+    }
     pub fn list(&self) -> Result<Vec<GitWorktree>, WorkspaceError> {
         let output = self.git(&["worktree", "list", "--porcelain"])?; let mut worktrees = Vec::new(); let mut path = None; let mut branch = None;
         for line in output.lines().chain(std::iter::once("")) { if line.is_empty() { if let (Some(path), Some(branch)) = (path.take(), branch.take()) { let path = PathBuf::from(path); if let Ok(relative) = path.strip_prefix(&self.worktrees_root) { if relative.components().count() == 1 { worktrees.push(GitWorktree { name: relative.to_string_lossy().to_string(), branch, path }); } } } continue; } if let Some(value) = line.strip_prefix("worktree ") { path = Some(value.to_owned()); } else if let Some(value) = line.strip_prefix("branch refs/heads/") { branch = Some(value.to_owned()); } }
@@ -57,6 +89,6 @@ impl GitWorktreeManager {
 
 fn validate_name(name: &str) -> Result<(), WorkspaceError> { if name.is_empty() || matches!(name, "." | "..") || !name.chars().all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')) { return Err(WorkspaceError::InvalidName(name.to_owned())); } Ok(()) }
 #[derive(Debug, thiserror::Error)]
-pub enum WorkspaceError { #[error("workspace name is invalid: {0}")] InvalidName(String), #[error("workspace already exists: {0}")] AlreadyExists(String), #[error("workspace not found: {0}")] NotFound(String), #[error("parallel agent count must be greater than zero")] InvalidAgentCount, #[error("git command failed: {0}")] Git(String), #[error(transparent)] Io(#[from] std::io::Error) }
+pub enum WorkspaceError { #[error("workspace name is invalid: {0}")] InvalidName(String), #[error("workspace already exists: {0}")] AlreadyExists(String), #[error("workspace not found: {0}")] NotFound(String), #[error("explicit review approval is required before merging workspace: {0}")] ReviewRequired(String), #[error("parallel agent count must be greater than zero")] InvalidAgentCount, #[error("git command failed: {0}")] Git(String), #[error(transparent)] Io(#[from] std::io::Error) }
 
-#[cfg(test)] mod tests { use super::{CleanupPolicy, WorkspaceError, validate_name}; #[test] fn workspace_names_reject_paths() { assert!(validate_name("../escape").is_err()); assert!(validate_name("agent-auth_01").is_ok()); } #[test] fn cleanup_policy_is_explicit() { assert_eq!(CleanupPolicy::Keep, CleanupPolicy::Keep); assert!(matches!(WorkspaceError::InvalidAgentCount, WorkspaceError::InvalidAgentCount)); } }
+#[cfg(test)] mod tests { use super::{CleanupPolicy, ContainerWorkspaceBackend, WorkspaceBackend, WorkspaceError, validate_name}; #[test] fn workspace_names_reject_paths() { assert!(validate_name("../escape").is_err()); assert!(validate_name("agent-auth_01").is_ok()); } #[test] fn cleanup_policy_is_explicit() { assert_eq!(CleanupPolicy::Keep, CleanupPolicy::Keep); assert!(matches!(WorkspaceError::InvalidAgentCount, WorkspaceError::InvalidAgentCount)); } #[test] fn container_backend_is_safe_by_default() { let backend = ContainerWorkspaceBackend::new("docker", "rust:latest"); assert!(backend.describe().contains("network=false")); } }
