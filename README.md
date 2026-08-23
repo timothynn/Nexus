@@ -76,33 +76,32 @@ Includes bounded concurrency, deterministic task layers, cancellation fan-out, c
 
 ## Phase 4 — Extensibility + Isolation 🚧
 
-### Interactive TUI
+### Interactive TUI + live runtime events
 
-`nexus-tui` is now a dedicated terminal operator surface:
+`nexus-tui` is now a dedicated terminal operator surface consuming the same typed `AgentEvent` stream emitted by Nexus orchestration:
 
 ```text
-┌ ◈ NEXUS ─────────────────────────────────────────────┐
-│ Run │ Agents │ Context │ Sessions │ Config │ Help     │
-├───────────────┬───────────────────────────────────────┤
-│ Agents        │ Active workspace + live event timeline│
-│ Supervisor    │                                       │
-│ Worker-1      │ run.started                           │
-│ Worker-2      │ system.ready                          │
-│ Reviewer      │ command.queued                        │
-├───────────────┴───────────────────────────────────────┤
-│ > task input                                         │
-└───────────────────────────────────────────────────────┘
+MultiAgentCoordinator / Scheduler
+              ↓
+        AgentEventSink
+              ↓
+          channel bridge
+              ↓
+          nexus-tui
+              ↓
+  live operator event timeline
 ```
 
 Current operator controls:
 
 - `Tab` cycles focus
 - `←` / `→` switches workspace tabs
-- command input queues operator commands into the timeline
+- `↑` / `↓` inspects the event timeline
+- command input records queued operator commands
 - `Esc` leaves command input
 - `q` exits
 
-The TUI is intentionally a thin operator layer. Its next increment will bind queued commands and `AgentEventSink` directly to live runtime execution rather than reimplementing orchestration.
+The TUI remains intentionally thin: it consumes runtime events rather than recreating orchestration. The next increment is a command-dispatch adapter for launching and cancelling real runs from the console.
 
 ### MCP
 
@@ -176,7 +175,8 @@ crates/
 - [x] Container lifecycle management
 - [x] Plugin runtime loading and capability enforcement
 - [x] Interactive TUI foundation
-- [ ] Live runtime/event binding for the TUI
+- [x] Live runtime/event stream binding for the TUI
+- [ ] TUI command dispatch and cancellation controls
 - [ ] Tauri desktop application
 - [ ] Remote workers
 
