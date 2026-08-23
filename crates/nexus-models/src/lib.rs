@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use futures_core::Stream;
 use futures_util::stream;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub type ModelEventStream =
     Pin<Box<dyn Stream<Item = Result<ModelStreamEvent, ModelError>> + Send>>;
@@ -50,6 +51,14 @@ impl ModelCapabilities {
             reasoning: false,
         }
     }
+
+    #[must_use]
+    pub const fn with_tool_calling() -> Self {
+        Self {
+            tool_calling: true,
+            ..Self::chat_only()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,10 +70,14 @@ pub enum MessageRole {
     Tool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: MessageRole,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 impl ChatMessage {
@@ -73,8 +86,48 @@ impl ChatMessage {
         Self {
             role,
             content: content.into(),
+            name: None,
+            tool_call_id: None,
         }
     }
+
+    #[must_use]
+    pub fn tool(
+        name: impl Into<String>,
+        tool_call_id: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            role: MessageRole::Tool,
+            content: content.into(),
+            name: Some(name.into()),
+            tool_call_id: Some(tool_call_id.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelToolDefinition {
+    pub name: String,
+    pub description: String,
+    #[serde(default = "default_object_schema")]
+    pub input_schema: Value,
+}
+
+fn default_object_schema() -> Value {
+    serde_json::json!({ "type": "object" })
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelToolCall {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_object_value")]
+    pub arguments: Value,
+}
+
+fn default_object_value() -> Value {
+    serde_json::json!({})
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +135,8 @@ pub struct ModelRequest {
     pub model: ModelId,
     #[serde(default)]
     pub messages: Vec<ChatMessage>,
+    #[serde(default)]
+    pub tools: Vec<ModelToolDefinition>,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
 }
@@ -92,6 +147,7 @@ impl ModelRequest {
         Self {
             model: model.into(),
             messages: vec![ChatMessage::new(MessageRole::User, prompt)],
+            tools: Vec::new(),
             temperature: None,
             max_output_tokens: None,
         }
@@ -108,6 +164,8 @@ pub struct Usage {
 pub struct ModelResponse {
     pub model: ModelId,
     pub message: ChatMessage,
+    #[serde(default)]
+    pub tool_calls: Vec<ModelToolCall>,
     pub usage: Usage,
 }
 
@@ -214,6 +272,7 @@ impl ModelProvider for MockModelProvider {
                 MessageRole::Assistant,
                 format!("Mock Nexus response: {prompt}"),
             ),
+            tool_calls: Vec::new(),
             usage: Usage {
                 input_tokens: request.messages.len() as u64,
                 output_tokens: 4,
@@ -243,7 +302,12 @@ impl ModelProvider for MockModelProvider {
 mod tests {
     use std::sync::Arc;
 
-    use super::{MockModelProvider, ModelProvider, ModelRequest, ProviderRegistry};
+    use serde_json::json;
+
+    use super::{
+        ChatMessage, MessageRole, MockModelProvider, ModelProvider, ModelRequest, ModelToolCall,
+        ModelToolDefinition, ProviderRegistry,
+    };
 
     #[tokio::test]
     async fn mock_provider_completes_a_prompt() {
@@ -254,6 +318,7 @@ mod tests {
             .expect("mock provider should succeed");
 
         assert!(response.message.content.contains("hello nexus"));
+        assert!(response.tool_calls.is_empty());
     }
 
     #[test]
@@ -262,6 +327,32 @@ mod tests {
         registry.register(Arc::new(MockModelProvider::default()));
 
         assert_eq!(registry.names(), vec!["mock"]);
-        assert_eq!(registry.get("mock").expect("provider should exist").name(), "mock");
+        assert_eq!(
+            registry
+                .get("mock")
+                .expect("provider should exist")
+                .name(),
+            "mock"
+        );
+    }
+
+    #[test]
+    fn tool_messages_and_calls_preserve_provider_neutral_metadata() {
+        let message = ChatMessage::tool("echo", "call-1", "done");
+        let call = ModelToolCall {
+            id: "call-1".to_owned(),
+            name: "echo".to_owned(),
+            arguments: json!({ "value": 42 }),
+        };
+        let definition = ModelToolDefinition {
+            name: "echo".to_owned(),
+            description: "echoes input".to_owned(),
+            input_schema: json!({ "type": "object" }),
+        };
+
+        assert_eq!(message.role, MessageRole::Tool);
+        assert_eq!(message.name.as_deref(), Some("echo"));
+        assert_eq!(call.arguments["value"], 42);
+        assert_eq!(definition.input_schema["type"], "object");
     }
 }
