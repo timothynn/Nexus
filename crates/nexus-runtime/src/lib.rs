@@ -13,7 +13,9 @@ use nexus_models::{
     ChatMessage, ModelError, ModelId, ModelProvider, ModelRequest, ModelResponse,
     ModelStreamEvent, ModelToolDefinition, Usage,
 };
-use nexus_permissions::{enforce, PermissionError, PermissionPolicy, PermissionRequest};
+use nexus_permissions::{
+    PermissionApprover, PermissionError, PermissionPolicy, PermissionRequest, enforce_with_approver,
+};
 use nexus_tools::{ToolError, ToolRegistry, ToolRequest, ToolResponse};
 
 #[derive(Debug, Clone)]
@@ -177,12 +179,23 @@ fn add_usage(total: &mut Usage, usage: &Usage) {
 pub struct AuthorizedToolExecutor {
     registry: ToolRegistry,
     policy: Arc<dyn PermissionPolicy>,
+    approver: Option<Arc<dyn PermissionApprover>>,
 }
 
 impl AuthorizedToolExecutor {
     #[must_use]
     pub fn new(registry: ToolRegistry, policy: Arc<dyn PermissionPolicy>) -> Self {
-        Self { registry, policy }
+        Self {
+            registry,
+            policy,
+            approver: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_approver(mut self, approver: Arc<dyn PermissionApprover>) -> Self {
+        self.approver = Some(approver);
+        self
     }
 
     #[must_use]
@@ -204,7 +217,11 @@ impl AuthorizedToolExecutor {
         request: ToolRequest,
     ) -> Result<ToolResponse, RuntimeError> {
         let permission_request = PermissionRequest::new(tool_name);
-        enforce(self.policy.as_ref(), &permission_request)?;
+        enforce_with_approver(
+            self.policy.as_ref(),
+            self.approver.as_deref(),
+            &permission_request,
+        )?;
         Ok(self.registry.execute(tool_name, request).await?)
     }
 }
@@ -236,7 +253,7 @@ mod tests {
         ChatMessage, MockModelProvider, ModelCapabilities, ModelError, ModelEventStream, ModelId,
         ModelProvider, ModelRequest, ModelResponse, ModelStreamEvent, ModelToolCall, Usage,
     };
-    use nexus_permissions::{PermissionDecision, RuleBasedPolicy};
+    use nexus_permissions::{PermissionApprover, PermissionDecision, RuleBasedPolicy};
     use nexus_tools::{Tool, ToolMetadata, ToolRegistry, ToolRequest, ToolResponse};
     use serde_json::json;
     use tokio::sync::Mutex;
@@ -244,6 +261,13 @@ mod tests {
     use super::{AgentRuntime, AuthorizedToolExecutor, RuntimeError};
 
     struct EchoTool;
+    struct StaticApprover(bool);
+
+    impl PermissionApprover for StaticApprover {
+        fn approve(&self, _request: &nexus_permissions::PermissionRequest) -> bool {
+            self.0
+        }
+    }
 
     #[async_trait]
     impl Tool for EchoTool {
@@ -422,6 +446,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn authorized_executor_uses_approver_for_asked_tools() {
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Arc::new(EchoTool))
+            .expect("tool registration should succeed");
+        let policy = RuleBasedPolicy::new(PermissionDecision::Ask);
+        let executor = AuthorizedToolExecutor::new(registry, Arc::new(policy))
+            .with_approver(Arc::new(StaticApprover(true)));
+
+        let response = executor
+            .execute(
+                "echo",
+                ToolRequest {
+                    input: json!({ "value": 42 }),
+                },
+            )
+            .await
+            .expect("approved tool should execute");
+
+        assert_eq!(response.output["value"], 42);
+    }
+
+    #[tokio::test]
     async fn agent_loop_executes_tools_and_returns_final_answer() {
         let provider = Arc::new(ScriptedProvider::new(vec![
             response(
@@ -451,7 +498,14 @@ mod tests {
         let requests = provider.requests.lock().await;
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].tools[0].name, "echo");
-        assert_eq!(requests[1].messages.last().expect("tool result").content, "{\"value\":42}");
+        assert_eq!(
+            requests[1]
+                .messages
+                .last()
+                .expect("tool result")
+                .content,
+            "{\"value\":42}"
+        );
     }
 
     #[tokio::test]
