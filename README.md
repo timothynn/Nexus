@@ -67,9 +67,7 @@ Implemented:
 - Model-aware token estimates
 - Durable sessions and replay
 
-## Phase 3 — Parallel Agents 🟡
-
-Nexus now has the core orchestration primitives:
+## Phase 3 — Multi-Agent Orchestration 🟢
 
 ```text
 Task Graph
@@ -78,11 +76,15 @@ Dependency Layers
    ↓
 Parallel Workers ── each in an isolated worktree
    ↓
-Supervisor Plan
+Typed Worker Handoffs
    ↓
-Reviewer Plan
+Supervisor
    ↓
-Explicit Human Review / Merge
+Reviewer
+   ↓
+Explicit Human Review
+   ↓
+Optional Explicit Merge
 ```
 
 Implemented:
@@ -92,15 +94,19 @@ Implemented:
 - Real Nexus runs in agent workspaces
 - Deterministic result ordering
 - Task graphs and dependency validation
-- Supervisor / worker / reviewer plans
+- Unified multi-agent coordinator
+- Cancellation fan-out through child cancellation tokens
+- Structured worker → supervisor → reviewer handoffs
 - Workspace cleanup policies: `keep`, `remove-clean`, `remove-always`
-- Workspace backend abstraction for future containers and remote workers
+- Explicit review candidates exposing workspace status and diff
+- Merge boundary requiring explicit approval; autonomous agents never merge by default
+- Container workspace backend configuration with safe defaults: no network and read-only container root
 
-The next Phase 3 step is executing these plans as a unified coordinator with cancellation fan-out and structured handoffs.
+> The container backend currently provides the execution contract and Docker/OCI command construction. Runtime provisioning and automatic container lifecycle management are the next hardening step.
 
 ## Phase 4 — Extensibility 🟡
 
-### MCP tools now use the Nexus tool boundary
+### MCP tools use the Nexus tool boundary
 
 ```text
 MCP Server
@@ -114,7 +120,7 @@ Permission Policy
 Audit + Agent Loop
 ```
 
-The `nexus-mcp` crate now adapts discovered MCP tools into Nexus `Tool` implementations. MCP tools can therefore inherit the same permission and execution contracts as built-in tools rather than becoming a parallel execution system.
+The `nexus-mcp` crate adapts discovered MCP tools into Nexus `Tool` implementations. MCP tools can therefore inherit the same permission and execution contracts as built-in tools rather than becoming a parallel execution system.
 
 ### Skills, templates, and hooks
 
@@ -124,7 +130,7 @@ The `nexus-mcp` crate now adapts discovered MCP tools into Nexus `Tool` implemen
 .nexus/hooks.toml
 ```
 
-Skills and templates are composable instruction sources. Hooks remain intentionally explicit configuration; automatic execution is the next step and must route through the same structured shell and permission boundaries.
+Skills and templates are composable instruction sources. Hooks remain intentionally explicit configuration; automatic execution must route through the same structured shell and permission boundaries.
 
 # 🧬 Architecture
 
@@ -136,13 +142,13 @@ crates/
 ├── nexus-core/                Stable domain contracts
 ├── nexus-config/              Layered configuration
 ├── nexus-context/             Discovery, instructions, Git context, search
-├── nexus-agents/              Parallel scheduling and task graphs
+├── nexus-agents/              Scheduling, task graphs, coordinator, handoffs
 ├── nexus-models/              Provider contracts and adapters
 ├── nexus-tools/               Tool registry and local tools
 ├── nexus-permissions/         Policies and approvals
 ├── nexus-runtime/             Agent loop, cancellation, audit events
 ├── nexus-storage/             SQLite sessions and replay
-├── nexus-workspace/           Worktrees and workspace policies
+├── nexus-workspace/           Worktrees, review, cleanup, container backend
 ├── nexus-mcp/                 MCP client and Tool adapters
 └── nexus-skills/              Skills, hooks, and templates
 ```
@@ -152,26 +158,25 @@ crates/
 ## Completed
 - [x] Phase 1 — Execution Core
 - [x] Phase 2 — Context + Sessions
+- [x] Phase 3 — Multi-Agent Orchestration foundation
 
-## Current: Phase 3
-- [x] Parallel workers
-- [x] Task graph contracts
-- [x] Supervisor/reviewer plans
-- [x] Cleanup policies
-- [ ] Unified coordinator and cancellation fan-out
-- [ ] Structured supervisor/reviewer handoffs
-- [ ] Container backend
-- [ ] Human review/merge workflow
-
-## Next: Phase 4
+## Current: Phase 4
 - [x] MCP transport and Nexus Tool adapters
 - [x] Skills and templates
 - [x] Hook configuration
 - [ ] Permission-controlled hook execution
-- [ ] Plugin system and SDK seams
+- [ ] Plugin manifests and capability boundaries
+- [ ] Public SDK seams
 - [ ] TUI
 - [ ] Tauri desktop application
 - [ ] Remote workers
+
+## Next hardening steps
+- [ ] Wire `MultiAgentCoordinator` into the CLI as the primary orchestration surface
+- [ ] Provision and supervise container workspace lifecycles
+- [ ] Add explicit branch-target validation to merge commands
+- [ ] Add integration tests for cancellation, task graphs, handoffs, and review
+- [ ] Add run-level observability across all parallel workers
 
 # 🛠️ Development Workflow
 
