@@ -5,6 +5,7 @@ members = [
   "crates/nexus-core",
   "crates/nexus-config",
   "crates/nexus-context",
+  "crates/nexus-agents",
   "crates/nexus-models",
   "crates/nexus-tools",
   "crates/nexus-permissions",
