@@ -12,6 +12,8 @@ futures-util.workspace = true
 nexus-config = { path = "../nexus-config" }
 nexus-core = { path = "../nexus-core" }
 nexus-models = { path = "../nexus-models" }
+nexus-permissions = { path = "../nexus-permissions" }
+nexus-tools = { path = "../nexus-tools" }
 thiserror.workspace = true
 tokio.workspace = true
 
