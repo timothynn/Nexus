@@ -12,7 +12,7 @@
 
 ---
 
-> **Nexus is not another AI chat wrapper.** It is a configurable runtime where models, agents, tools, permissions, context, sessions, workspaces, skills, hooks, and integrations are composable primitives.
+> **Nexus is not another AI chat wrapper.** It is a configurable runtime where models, agents, tools, permissions, context, sessions, workspaces, skills, hooks, plugins, and integrations are composable primitives.
 
 # 🚀 Quick Start
 
@@ -34,24 +34,11 @@ nexus run --provider openai-compatible --model "your-model-id" --tools --session
 
 ## Phase 1 — Execution Core ✅
 
-```text
-Task → Instructions/Context → Model → Tool Call
-                              ↓
-                    Permission Decision
-                              ↓
-                    Tool + Audit Event
-                              ↓
-                       Continue / Finish
-```
-
-Implemented:
-
 - Provider-neutral models, streaming, and OpenAI-compatible adapter
 - Bounded model-driven tool loop
 - Filesystem and structured shell tools
 - `allow` / `ask` / `deny` / `sandbox` permissions
-- CLI approval boundary
-- Ctrl+C cooperative cancellation
+- CLI approval boundary and Ctrl+C cancellation
 - Structured audit events
 - SQLite session persistence and replay
 - Isolated Git worktrees
@@ -59,68 +46,35 @@ Implemented:
 ## Phase 2 — Context + Sessions ✅
 
 - Layered global/project/environment configuration
-- Deterministic repository discovery
-- Context and token budgets
+- Deterministic repository discovery and context budgets
 - Hierarchical `.nexus/instructions.md` and `AGENTS.md`
-- Git-aware modified/staged/untracked prioritization
-- Local deterministic code search
+- Git-aware prioritization and local code search
 - Model-aware token estimates
 - Durable sessions and replay
 
-## Phase 3 — Multi-Agent Orchestration 🟢
+## Phase 3 — Multi-Agent Orchestration ✅
 
 ```text
-Task Graph
-   ↓
-Dependency Layers
-   ↓
-Parallel Workers ── each in an isolated worktree
-   ↓
-Typed Worker Handoffs
-   ↓
-Supervisor
-   ↓
-Reviewer
-   ↓
-Explicit Human Review
-   ↓
-Optional Explicit Merge
+Task Graph → Dependency Layers → Parallel Workers
+                                  ↓
+                           Typed Handoffs
+                                  ↓
+                        Supervisor → Reviewer
+                                  ↓
+                       Explicit Human Review
 ```
 
-Implemented:
+Implemented: isolated worktrees, bounded concurrency, deterministic results, task graphs, unified coordination, cancellation fan-out, worker/supervisor/reviewer handoffs, cleanup policies, review candidates, explicit merge boundaries, and a container workspace execution foundation.
 
-- One isolated worktree per agent
-- Bounded concurrent scheduling
-- Real Nexus runs in agent workspaces
-- Deterministic result ordering
-- Task graphs and dependency validation
-- Unified multi-agent coordinator
-- Cancellation fan-out through child cancellation tokens
-- Structured worker → supervisor → reviewer handoffs
-- Workspace cleanup policies: `keep`, `remove-clean`, `remove-always`
-- Explicit review candidates exposing workspace status and diff
-- Merge boundary requiring explicit approval; autonomous agents never merge by default
-- Container workspace backend configuration with safe defaults: no network and read-only container root
-
-> The container backend currently provides the execution contract and Docker/OCI command construction. Runtime provisioning and automatic container lifecycle management are the next hardening step.
-
-## Phase 4 — Extensibility 🟡
+## Phase 4 — Extensibility 🚧
 
 ### MCP tools use the Nexus tool boundary
 
 ```text
-MCP Server
-   ↓ tools/list
-MCP Tool Adapter
-   ↓
-Nexus ToolRegistry
-   ↓
-Permission Policy
-   ↓
-Audit + Agent Loop
+MCP Server → tools/list → MCP Tool Adapter → ToolRegistry
+                                         ↓
+                                  Permissions + Audit
 ```
-
-The `nexus-mcp` crate adapts discovered MCP tools into Nexus `Tool` implementations. MCP tools can therefore inherit the same permission and execution contracts as built-in tools rather than becoming a parallel execution system.
 
 ### Skills, templates, and hooks
 
@@ -130,7 +84,17 @@ The `nexus-mcp` crate adapts discovered MCP tools into Nexus `Tool` implementati
 .nexus/hooks.toml
 ```
 
-Skills and templates are composable instruction sources. Hooks remain intentionally explicit configuration; automatic execution must route through the same structured shell and permission boundaries.
+Hooks now have a permission-aware execution seam. Every configured lifecycle command must pass a `PermissionPolicy`; denied or approval-required hooks cannot execute silently.
+
+### Plugins and capability boundaries
+
+Project plugins live under:
+
+```text
+.nexus/plugins/<name>/plugin.toml
+```
+
+Each manifest declares its entrypoint and explicit capabilities, such as filesystem access, shell execution, network access, model access, workspace management, and session access. Nexus can therefore reject capability escalation instead of treating plugins as implicitly trusted code.
 
 # 🧬 Architecture
 
@@ -150,7 +114,8 @@ crates/
 ├── nexus-storage/             SQLite sessions and replay
 ├── nexus-workspace/           Worktrees, review, cleanup, container backend
 ├── nexus-mcp/                 MCP client and Tool adapters
-└── nexus-skills/              Skills, hooks, and templates
+├── nexus-skills/              Skills, templates, and permissioned hooks
+└── nexus-plugins/             Plugin manifests and capability boundaries
 ```
 
 # 🗺️ Roadmap
@@ -163,20 +128,15 @@ crates/
 ## Current: Phase 4
 - [x] MCP transport and Nexus Tool adapters
 - [x] Skills and templates
-- [x] Hook configuration
-- [ ] Permission-controlled hook execution
-- [ ] Plugin manifests and capability boundaries
+- [x] Permission-controlled hook execution seam
+- [x] Plugin manifests and capability boundaries
 - [ ] Public SDK seams
+- [ ] CLI integration for unified multi-agent orchestration
+- [ ] Run-level observability across parallel workers
+- [ ] Container lifecycle management
 - [ ] TUI
 - [ ] Tauri desktop application
 - [ ] Remote workers
-
-## Next hardening steps
-- [ ] Wire `MultiAgentCoordinator` into the CLI as the primary orchestration surface
-- [ ] Provision and supervise container workspace lifecycles
-- [ ] Add explicit branch-target validation to merge commands
-- [ ] Add integration tests for cancellation, task graphs, handoffs, and review
-- [ ] Add run-level observability across all parallel workers
 
 # 🛠️ Development Workflow
 
@@ -190,5 +150,3 @@ cargo clippy --workspace --all-targets -- -D warnings
 # 💭 The Nexus Principle
 
 > **Don't build an AI assistant that locks developers into one workflow. Build the primitives that let developers create their own.**
-
-Nexus is designed so the same execution contracts can power a CLI today, a TUI tomorrow, and a desktop or distributed agent platform later—without rewriting the core runtime.
