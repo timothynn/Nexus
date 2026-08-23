@@ -262,12 +262,6 @@ mod tests {
         registry.register(Arc::new(MockModelProvider::default()));
 
         assert_eq!(registry.names(), vec!["mock"]);
-        assert_eq!(
-            registry
-                .get("mock")
-                .expect("provider should exist")
-                .name(),
-            "mock"
-        );
+        assert_eq!(registry.get("mock").expect("provider should exist").name(), "mock");
     }
 }
