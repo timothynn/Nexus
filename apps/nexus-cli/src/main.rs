@@ -22,11 +22,9 @@ use nexus_models::{
 use nexus_permissions::{
     PermissionApprover, PermissionDecision, PermissionRequest, RuleBasedPolicy,
 };
-use nexus_runtime::{
-    AgentRuntime, AuditEvent, AuditSink, AuthorizedToolExecutor, RuntimeError,
-};
+use nexus_runtime::{AgentRuntime, AuditEvent, AuditSink, AuthorizedToolExecutor};
 use nexus_skills::{
-    discover_skills, load_agent_template, load_hooks, load_skill, HookEvent,
+    HookEvent, discover_skills, load_agent_template, load_hooks, load_skill,
 };
 use nexus_storage::{SessionStore, SqliteStore};
 use nexus_tools::{FileSystemTool, ShellTool, ToolRegistry};
@@ -64,7 +62,7 @@ enum Command {
         /// Persist the complete execution trace in .nexus/nexus.db.
         #[arg(long)]
         session: bool,
-        /// Apply Git-aware repository context prioritization to instruction discovery.
+        /// Prioritize Git-modified and untracked files in agent context guidance.
         #[arg(long)]
         git_context: bool,
         /// Reusable agent template from .nexus/agents/<name>.toml.
@@ -290,6 +288,7 @@ fn resolved_instructions(
     target: &PathBuf,
     agent_template: Option<&str>,
     skill_names: &[String],
+    git_context: bool,
 ) -> Result<String> {
     let mut template_instructions = None;
     let mut selected_skills = skill_names.to_vec();
@@ -308,7 +307,20 @@ fn resolved_instructions(
             content: format!("# Skill: {}\n{}", skill.name, skill.instructions),
         });
     }
-    Ok(instruction_set.combined())
+    let mut combined = instruction_set.combined();
+    if git_context {
+        let snapshot = discover_git_aware(root, &ContextOptions::default())?;
+        let files = snapshot
+            .prioritized_files
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>();
+        if !files.is_empty() {
+            combined.push_str("\n\n## Git-aware priority\nPrioritize these changed or untracked files when investigating the task:\n");
+            combined.push_str(&files.join("\n"));
+        }
+    }
+    Ok(combined)
 }
 
 struct RuntimeAgentJob {
@@ -343,6 +355,7 @@ impl AgentJob for RuntimeAgentJob {
             &workspace.worktree.path,
             None,
             &[],
+            true,
         )
         .map_err(|error| AgentError::Execution(error.to_string()))?;
         let result = runtime
@@ -430,20 +443,13 @@ async fn main() -> Result<()> {
                     })
                     .await?
             } else if tools {
-                if git_context {
-                    let options = ContextOptions::default();
-                    let snapshot = discover_git_aware(&root, &options)?;
-                    eprintln!(
-                        "[nexus] Git-aware context: {} prioritized files",
-                        snapshot.prioritized_files.len()
-                    );
-                }
                 let executor = build_tool_executor(root.clone(), yes)?;
                 let instructions = resolved_instructions(
                     &root,
                     &root,
                     agent_template.as_deref(),
                     &skills,
+                    git_context,
                 )?;
                 let cancellation = CancellationToken::new();
                 let signal_token = cancellation.clone();
@@ -611,7 +617,11 @@ async fn main() -> Result<()> {
                         HookEvent::RunCompleted,
                         HookEvent::RunFailed,
                     ] {
-                        println!("{}\t{}", format!("{event:?}").to_ascii_lowercase(), hooks.commands(event).len());
+                        println!(
+                            "{}\t{}",
+                            format!("{event:?}").to_ascii_lowercase(),
+                            hooks.commands(event).len()
+                        );
                     }
                 }
             }
