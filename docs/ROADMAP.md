@@ -6,12 +6,12 @@ Nexus is being implemented as a reliable execution harness before expanding into
 
 1. **Execution core** — model contracts, tool loops, permissions, auditability, cancellation.
 2. **Workspace isolation** — Git worktrees for safe parallel coding agents.
-3. **Real model providers** — OpenAI-compatible first, then additional local/cloud adapters.
-4. **Configuration and sessions** — project settings, durable runs, replay, and diagnostics.
-5. **Context engineering** — repository discovery, instructions, indexing, token budgets, context inspection.
-6. **Parallel agents** — subagents orchestrated over isolated workspaces.
-7. **Extensibility** — MCP, skills, hooks, plugins, and SDKs.
-8. **Interfaces** — TUI, desktop, IDE integration, and remote workers.
+3. **Configuration and sessions** — project settings, durable runs, replay, and diagnostics.
+4. **Context engineering** — repository discovery, instructions, indexing, token budgets, context inspection.
+5. **Parallel agents** — subagents orchestrated over isolated workspaces.
+6. **Extensibility** — MCP, skills, hooks, plugins, and SDKs.
+7. **Interfaces** — TUI, desktop, IDE integration, and remote workers.
+8. **Provider expansion** — streaming parity, additional cloud/local adapters, routing, and fallback.
 
 ## Phase 1 — Core MVP
 
@@ -31,11 +31,13 @@ Nexus is being implemented as a reliable execution harness before expanding into
 - [x] Provider-neutral tool call responses
 - [x] Tool result messages with call correlation
 - [x] Mock provider
+- [x] OpenAI-compatible Chat Completions provider
 - [x] Basic runtime model execution
 - [x] Streaming runtime execution
 - [x] Bounded model-driven tool loop
+- [x] Provider selection in the CLI
 - [ ] Agent configuration
-- [ ] First real provider adapter
+- [ ] OpenAI-compatible streaming
 - [ ] Provider registry in the CLI
 
 ### Milestone 3: Tools and permissions
@@ -49,7 +51,7 @@ Nexus is being implemented as a reliable execution harness before expanding into
 - [x] Explicit allow / ask / deny / sandbox enforcement
 - [x] Pluggable approval boundary for `ask`
 - [x] Runtime enforcement before every tool execution
-- [ ] CLI/desktop approval UX
+- [x] CLI approval prompts
 - [ ] Execution audit event store
 - [ ] Cancellation propagation
 
@@ -79,26 +81,27 @@ Nexus is being implemented as a reliable execution harness before expanding into
 ```text
 Task
   → Config
+  → Provider Selection
   → Agent Runtime
   → Model
   → Tool Call?
       ├── no → Result
       └── yes
             → Permission Check
-            → Approval Boundary (when needed)
+            → CLI Approval (when needed)
             → Tool Execution
             → Tool Result
             → Model
 ```
 
-The next milestone is making this vertical slice usable from the CLI with a real provider, built-in workspace tools, and durable execution traces.
+The core vertical slice is now available from the CLI. The next milestone is making runs durable and inspectable with execution events, sessions, cancellation, and replay.
 
 ## Phase 2 — Developer Harness
 
-- [ ] OpenAI-compatible provider
-- [ ] Provider configuration and environment diagnostics
-- [ ] Built-in coding agent tool bundle
-- [ ] CLI approval prompts
+- [x] OpenAI-compatible provider
+- [x] CLI provider selection and environment-key loading
+- [x] Built-in filesystem + shell coding tool bundle
+- [x] CLI approval prompts
 - [ ] Repository context discovery
 - [ ] Hierarchical instructions
 - [ ] Code indexing and search
