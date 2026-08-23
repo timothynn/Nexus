@@ -108,6 +108,24 @@ Task Graph → Dependency Layers → Parallel Workers
 
 Implemented: isolated worktrees, bounded concurrency, deterministic results, task graphs, unified coordination, cancellation fan-out, worker/supervisor/reviewer handoffs, cleanup policies, review candidates, explicit merge boundaries, container execution foundation, and a CLI graph operator surface.
 
+### Run-level observability
+
+Parallel orchestration now emits structured lifecycle events:
+
+```text
+run.started
+layer.started
+worker.started
+worker.completed
+worker.failed
+role.started
+role.completed
+run.completed
+run.cancelled
+```
+
+The `AgentEventSink` seam is shared by both `ParallelAgentScheduler` and `MultiAgentCoordinator`, making it possible to plug the same event stream into a future TUI, desktop timeline, SQLite run history, tracing backend, or remote-worker dashboard without changing orchestration logic.
+
 ## Phase 4 — Extensibility 🚧
 
 ### MCP tools use the Nexus tool boundary
@@ -152,7 +170,7 @@ crates/
 ├── nexus-core/                Stable domain contracts
 ├── nexus-config/              Layered configuration
 ├── nexus-context/             Discovery, instructions, Git context, search
-├── nexus-agents/              Scheduling, task graphs, coordinator, handoffs
+├── nexus-agents/              Scheduling, task graphs, coordinator, observability
 ├── nexus-models/              Provider contracts and adapters
 ├── nexus-tools/               Tool registry and local tools
 ├── nexus-permissions/         Policies and approvals
@@ -179,7 +197,7 @@ crates/
 - [x] Plugin manifests and capability boundaries
 - [x] Public SDK foundation
 - [x] CLI integration for unified multi-agent orchestration
-- [ ] Run-level observability across parallel workers
+- [x] Structured run-level observability across parallel workers
 - [ ] Container lifecycle management
 - [ ] Plugin runtime loading and capability enforcement
 - [ ] Interactive TUI
