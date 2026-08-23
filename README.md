@@ -53,11 +53,8 @@ Nexus executes dependency layers, collects typed worker handoffs, then runs a su
 
 ## Embed Nexus in Rust
 
-Nexus now has a small public SDK facade for embedding the harness into another Rust application:
-
 ```rust
 use std::sync::Arc;
-
 use nexus_models::MockModelProvider;
 use nexus_sdk::{Nexus, RunRequest};
 
@@ -69,8 +66,6 @@ let nexus = Nexus::builder()
 let result = nexus.run(RunRequest::new("inspect this repository")).await?;
 println!("{}", result.message);
 ```
-
-The SDK intentionally starts small: builder-based configuration, provider/model injection, cancellable execution, and access to the advanced runtime seam.
 
 # 🟢 What's Working Now
 
@@ -106,27 +101,21 @@ Task Graph → Dependency Layers → Parallel Workers
                        Explicit Human Review
 ```
 
-Implemented: isolated worktrees, bounded concurrency, deterministic results, task graphs, unified coordination, cancellation fan-out, worker/supervisor/reviewer handoffs, cleanup policies, review candidates, explicit merge boundaries, container execution foundation, and a CLI graph operator surface.
+Implemented: isolated worktrees, bounded concurrency, deterministic results, task graphs, unified coordination, cancellation fan-out, structured handoffs, cleanup policies, review candidates, explicit merge boundaries, and dependency-aware CLI orchestration.
 
 ### Run-level observability
 
-Parallel orchestration now emits structured lifecycle events:
-
 ```text
-run.started
-layer.started
-worker.started
-worker.completed
-worker.failed
-role.started
-role.completed
-run.completed
-run.cancelled
+run.started → layer.started → worker.started/completed/failed
+                                      ↓
+                           role.started/completed
+                                      ↓
+                                run.completed
 ```
 
-The `AgentEventSink` seam is shared by both `ParallelAgentScheduler` and `MultiAgentCoordinator`, making it possible to plug the same event stream into a future TUI, desktop timeline, SQLite run history, tracing backend, or remote-worker dashboard without changing orchestration logic.
+The same `AgentEventSink` can feed a TUI, desktop timeline, SQLite history, tracing backend, or remote-worker dashboard.
 
-## Phase 4 — Extensibility 🚧
+## Phase 4 — Extensibility + Isolation 🚧
 
 ### MCP tools use the Nexus tool boundary
 
@@ -144,8 +133,6 @@ MCP Server → tools/list → MCP Tool Adapter → ToolRegistry
 .nexus/hooks.toml
 ```
 
-Hooks have a permission-aware execution seam. Every configured lifecycle command must pass a `PermissionPolicy`; denied or approval-required hooks cannot execute silently.
-
 ### Plugins and capability boundaries
 
 Project plugins live under:
@@ -154,7 +141,36 @@ Project plugins live under:
 .nexus/plugins/<name>/plugin.toml
 ```
 
-Each manifest declares its entrypoint and explicit capabilities, such as filesystem access, shell execution, network access, model access, workspace management, and session access.
+Each manifest declares explicit capabilities instead of inheriting unrestricted access.
+
+### Container lifecycle management
+
+The container workspace backend now supports a real lifecycle:
+
+```text
+health check
+    ↓
+provision container
+    ↓
+start
+    ↓
+execute with optional timeout
+    ↓
+stop
+    ↓
+remove
+```
+
+Safe defaults remain:
+
+- network disabled
+- read-only container root
+- explicit workspace mount
+- configurable memory and CPU limits
+- execution timeout that terminates the child process
+- idempotent stop/remove operations
+
+This is a stronger foundation for sandboxed agents than the earlier command-construction-only backend.
 
 ### Public SDK foundation
 
@@ -176,7 +192,7 @@ crates/
 ├── nexus-permissions/         Policies and approvals
 ├── nexus-runtime/             Agent loop, cancellation, audit events
 ├── nexus-storage/             SQLite sessions and replay
-├── nexus-workspace/           Worktrees, review, cleanup, container backend
+├── nexus-workspace/           Worktrees + container lifecycle isolation
 ├── nexus-mcp/                 MCP client and Tool adapters
 ├── nexus-skills/              Skills, templates, and permissioned hooks
 ├── nexus-plugins/             Plugin manifests and capability boundaries
@@ -198,7 +214,7 @@ crates/
 - [x] Public SDK foundation
 - [x] CLI integration for unified multi-agent orchestration
 - [x] Structured run-level observability across parallel workers
-- [ ] Container lifecycle management
+- [x] Container lifecycle provisioning, execution, and cleanup
 - [ ] Plugin runtime loading and capability enforcement
 - [ ] Interactive TUI
 - [ ] Tauri desktop application
