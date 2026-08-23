@@ -1,26 +1,38 @@
-//! Parallel, dependency-aware agent orchestration over isolated workspaces.
+//! Parallel, dependency-aware multi-agent orchestration over isolated workspaces.
 
 use std::{collections::{BTreeMap, BTreeSet}, sync::Arc};
 
 use async_trait::async_trait;
 use futures_util::{stream, StreamExt};
 use nexus_workspace::{AgentWorkspace, GitWorktreeManager, WorkspaceError};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone)]
 pub struct AgentOutcome { pub agent_index: usize, pub workspace: AgentWorkspace, pub summary: String }
 
+#[derive(Debug, Clone)]
+pub struct AgentHandoff { pub from: AgentRole, pub task_id: String, pub summary: String, pub workspace: AgentWorkspace }
+
 #[async_trait]
-pub trait AgentJob: Send + Sync { async fn run(&self, workspace: AgentWorkspace) -> Result<String, AgentError>; }
+pub trait AgentJob: Send + Sync { async fn run(&self, workspace: AgentWorkspace, cancellation: CancellationToken) -> Result<String, AgentError>; }
 
 pub struct ParallelAgentScheduler { max_concurrency: usize }
 impl ParallelAgentScheduler {
     #[must_use] pub fn new(max_concurrency: usize) -> Self { Self { max_concurrency } }
-    pub async fn execute(&self, manager: &GitWorktreeManager, run_name: &str, count: usize, base: Option<&str>, job: Arc<dyn AgentJob>) -> Result<Vec<AgentOutcome>, AgentError> {
+    pub async fn execute(&self, manager: &GitWorktreeManager, run_name: &str, count: usize, base: Option<&str>, job: Arc<dyn AgentJob>, cancellation: CancellationToken) -> Result<Vec<AgentOutcome>, AgentError> {
         if self.max_concurrency == 0 { return Err(AgentError::InvalidConcurrency); }
         let workspaces = manager.allocate_agents(run_name, count, base)?;
         let mut outcomes = stream::iter(workspaces.into_iter().map(|workspace| {
-            let job = Arc::clone(&job);
-            async move { let agent_index = workspace.agent_index; let summary = job.run(workspace.clone()).await?; Ok::<_, AgentError>(AgentOutcome { agent_index, workspace, summary }) }
+            let job = Arc::clone(&job); let cancellation = cancellation.child_token();
+            async move {
+                if cancellation.is_cancelled() { return Err(AgentError::Cancelled); }
+                let agent_index = workspace.agent_index;
+                let summary = tokio::select! {
+                    _ = cancellation.cancelled() => Err(AgentError::Cancelled),
+                    result = job.run(workspace.clone(), cancellation.child_token()) => result,
+                }?;
+                Ok::<_, AgentError>(AgentOutcome { agent_index, workspace, summary })
+            }
         })).buffer_unordered(self.max_concurrency).collect::<Vec<_>>().await.into_iter().collect::<Result<Vec<_>, _>>()?;
         outcomes.sort_by_key(|outcome| outcome.agent_index);
         Ok(outcomes)
@@ -61,10 +73,44 @@ pub fn build_supervisor_review_plan(tasks: &[TaskNode], supervisor_instructions:
     plans
 }
 
+#[async_trait]
+pub trait RoleRunner: Send + Sync {
+    async fn run(&self, plan: AgentPlan, handoffs: Vec<AgentHandoff>, cancellation: CancellationToken) -> Result<String, AgentError>;
+}
+
+#[derive(Debug, Clone)]
+pub struct OrchestrationResult { pub workers: Vec<AgentHandoff>, pub supervisor: AgentHandoff, pub reviewer: AgentHandoff }
+
+pub struct MultiAgentCoordinator { max_concurrency: usize }
+impl MultiAgentCoordinator {
+    #[must_use] pub fn new(max_concurrency: usize) -> Self { Self { max_concurrency } }
+    pub async fn execute_graph(&self, graph: &TaskGraph, manager: &GitWorktreeManager, run_name: &str, base: Option<&str>, worker: Arc<dyn AgentJob>, supervisor: Arc<dyn RoleRunner>, reviewer: Arc<dyn RoleRunner>, cancellation: CancellationToken) -> Result<OrchestrationResult, AgentError> {
+        let layers = graph.layers()?;
+        let scheduler = ParallelAgentScheduler::new(self.max_concurrency);
+        let mut handoffs = Vec::new();
+        for layer in layers {
+            if cancellation.is_cancelled() { return Err(AgentError::Cancelled); }
+            let layer_name = format!("{run_name}-{}", layer.first().cloned().unwrap_or_else(|| "layer".to_owned()));
+            let outcomes = scheduler.execute(manager, &layer_name, layer.len(), base, Arc::clone(&worker), cancellation.child_token()).await?;
+            for (task_id, outcome) in layer.into_iter().zip(outcomes) { handoffs.push(AgentHandoff { from: AgentRole::Worker, task_id, summary: outcome.summary, workspace: outcome.workspace }); }
+        }
+        let supervisor_workspace = handoffs.first().map(|handoff| handoff.workspace.clone()).ok_or(AgentError::EmptyGraph)?;
+        let supervisor_plan = AgentPlan { role: AgentRole::Supervisor, task_id: "supervisor".to_owned(), instructions: "Aggregate worker handoffs, resolve conflicts, and produce an implementation plan.".to_owned() };
+        let supervisor_summary = supervisor.run(supervisor_plan, handoffs.clone(), cancellation.child_token()).await?;
+        let supervisor_handoff = AgentHandoff { from: AgentRole::Supervisor, task_id: "supervisor".to_owned(), summary: supervisor_summary, workspace: supervisor_workspace.clone() };
+        let reviewer_plan = AgentPlan { role: AgentRole::Reviewer, task_id: "reviewer".to_owned(), instructions: "Review worker and supervisor output for correctness, regressions, and unmet requirements. Do not merge changes.".to_owned() };
+        let reviewer_summary = reviewer.run(reviewer_plan, [handoffs.clone(), vec![supervisor_handoff.clone()]].concat(), cancellation.child_token()).await?;
+        let reviewer_handoff = AgentHandoff { from: AgentRole::Reviewer, task_id: "reviewer".to_owned(), summary: reviewer_summary, workspace: supervisor_workspace };
+        Ok(OrchestrationResult { workers: handoffs, supervisor: supervisor_handoff, reviewer: reviewer_handoff })
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
     #[error(transparent)] Workspace(#[from] WorkspaceError),
     #[error("parallel agent concurrency must be greater than zero")] InvalidConcurrency,
+    #[error("agent execution was cancelled")] Cancelled,
+    #[error("task graph contains no tasks")] EmptyGraph,
     #[error("agent execution failed: {0}")] Execution(String),
     #[error("task `{task}` depends on unknown task `{dependency}`")] UnknownDependency { task: String, dependency: String },
     #[error("task graph contains a dependency cycle")] CyclicTaskGraph,
