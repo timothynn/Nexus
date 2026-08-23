@@ -20,3 +20,17 @@
 ## Documentation
 
 Update `README.md` and `docs/ROADMAP.md` whenever implemented status or CLI surfaces change.
+
+## Agent skills
+
+### Issue tracker
+
+This repo uses GitHub Issues to track work and bugs. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The following label strings are used for the five canonical triage roles: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repo uses a single-context layout. See `docs/agents/domain.md`.
