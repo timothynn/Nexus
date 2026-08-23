@@ -10,7 +10,8 @@ use futures_core::Stream;
 use futures_util::stream;
 use serde::{Deserialize, Serialize};
 
-pub type ModelEventStream = Pin<Box<dyn Stream<Item = Result<ModelStreamEvent, ModelError>> + Send>>;
+pub type ModelEventStream =
+    Pin<Box<dyn Stream<Item = Result<ModelStreamEvent, ModelError>> + Send>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ModelId(pub String);
@@ -209,7 +210,10 @@ impl ModelProvider for MockModelProvider {
 
         Ok(ModelResponse {
             model: request.model,
-            message: ChatMessage::new(MessageRole::Assistant, format!("Mock Nexus response: {prompt}")),
+            message: ChatMessage::new(
+                MessageRole::Assistant,
+                format!("Mock Nexus response: {prompt}"),
+            ),
             usage: Usage {
                 input_tokens: request.messages.len() as u64,
                 output_tokens: 4,
@@ -258,6 +262,12 @@ mod tests {
         registry.register(Arc::new(MockModelProvider::default()));
 
         assert_eq!(registry.names(), vec!["mock"]);
-        assert_eq!(registry.get("mock").expect("provider should exist").name(), "mock");
+        assert_eq!(
+            registry
+                .get("mock")
+                .expect("provider should exist")
+                .name(),
+            "mock"
+        );
     }
 }
