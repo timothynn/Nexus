@@ -1,0 +1,16 @@
+[package]
+name = "nexus-agents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+futures-util.workspace = true
+thiserror.workspace = true
+nexus-workspace = { path = "../nexus-workspace" }
+
+[lints]
+workspace = true
