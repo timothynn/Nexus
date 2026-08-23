@@ -1,0 +1,15 @@
+[package]
+name = "nexus-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+nexus-config = { path = "../nexus-config" }
+nexus-core = { path = "../nexus-core" }
+
+[lints]
+workspace = true
