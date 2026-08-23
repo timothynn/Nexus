@@ -8,8 +8,10 @@ repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+futures-util.workspace = true
 nexus-config = { path = "../nexus-config" }
 nexus-core = { path = "../nexus-core" }
+nexus-models = { path = "../nexus-models" }
 
 [lints]
 workspace = true
