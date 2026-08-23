@@ -9,6 +9,7 @@ members = [
   "crates/nexus-mcp",
   "crates/nexus-skills",
   "crates/nexus-plugins",
+  "crates/nexus-sdk",
   "crates/nexus-models",
   "crates/nexus-tools",
   "crates/nexus-permissions",
