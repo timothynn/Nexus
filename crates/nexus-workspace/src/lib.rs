@@ -4,7 +4,11 @@
 //! shell trick. Agent runs can therefore be isolated, inspected, and cleaned up
 //! without automatically merging changes into the user's primary checkout.
 
-use std::{fs, path::{Path, PathBuf}, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +26,10 @@ pub struct GitWorktreeManager {
 
 impl GitWorktreeManager {
     pub fn new(repository: impl Into<PathBuf>) -> Result<Self, WorkspaceError> {
-        let repository = repository.into().canonicalize().map_err(WorkspaceError::Io)?;
+        let repository = repository
+            .into()
+            .canonicalize()
+            .map_err(WorkspaceError::Io)?;
         let manager = Self {
             worktrees_root: repository.join(".nexus").join("worktrees"),
             repository,
@@ -52,12 +59,13 @@ impl GitWorktreeManager {
 
         let branch = format!("nexus/{name}");
         let base = base.unwrap_or("HEAD");
+        let path_string = path.to_string_lossy().to_string();
         self.git(&[
             "worktree",
             "add",
             "-b",
             branch.as_str(),
-            path.to_string_lossy().as_ref(),
+            path_string.as_str(),
             base,
         ])?;
 
@@ -147,15 +155,24 @@ impl GitWorktreeManager {
             .map_err(WorkspaceError::Io)?;
 
         if !output.status.success() {
-            return Err(WorkspaceError::Git(String::from_utf8_lossy(&output.stderr).trim().to_owned()));
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            return Err(WorkspaceError::Git(message));
         }
 
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .to_owned())
     }
 }
 
 fn validate_name(name: &str) -> Result<(), WorkspaceError> {
-    if name.is_empty() || !name.chars().all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')) {
+    let valid = !name.is_empty()
+        && !matches!(name, "." | "..")
+        && name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        });
+
+    if !valid {
         return Err(WorkspaceError::InvalidName(name.to_owned()));
     }
     Ok(())
@@ -180,9 +197,11 @@ mod tests {
     use super::validate_name;
 
     #[test]
-    fn workspace_names_reject_path_separators() {
+    fn workspace_names_reject_path_separators_and_dot_paths() {
         assert!(validate_name("agent/auth").is_err());
         assert!(validate_name("../escape").is_err());
+        assert!(validate_name(".").is_err());
+        assert!(validate_name("..").is_err());
         assert!(validate_name("agent-auth_01").is_ok());
     }
 }
