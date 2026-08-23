@@ -1,13 +1,16 @@
 //! Project-local skills, lifecycle hooks, and reusable agent templates.
-//!
-//! Skills live under `.nexus/skills/<name>/SKILL.md`. Agent templates live in
-//! `.nexus/agents/<name>.toml`. Hook commands are explicit configuration and are
-//! returned for the caller to execute through Nexus permissions rather than being
-//! executed implicitly by this crate.
 
-use std::{collections::BTreeMap, fs, path::{Path, PathBuf}};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
+use async_trait::async_trait;
+use nexus_permissions::{enforce, PermissionError, PermissionPolicy, PermissionRequest};
 use serde::{Deserialize, Serialize};
+use tokio::process::Command;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Skill {
@@ -31,9 +34,11 @@ pub fn discover_skills(root: impl AsRef<Path>) -> Result<Vec<Skill>, SkillError>
         if !path.is_file() {
             continue;
         }
-        let instructions = fs::read_to_string(&path).map_err(SkillError::Io)?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        skills.push(Skill { name, path, instructions });
+        skills.push(Skill {
+            name: entry.file_name().to_string_lossy().to_string(),
+            instructions: fs::read_to_string(&path).map_err(SkillError::Io)?,
+            path,
+        });
     }
     skills.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(skills)
@@ -68,8 +73,7 @@ pub fn load_hooks(root: impl AsRef<Path>) -> Result<HookConfig, SkillError> {
     if !path.exists() {
         return Ok(HookConfig::default());
     }
-    let raw = fs::read_to_string(path).map_err(SkillError::Io)?;
-    toml::from_str(&raw).map_err(SkillError::Toml)
+    toml::from_str(&fs::read_to_string(path).map_err(SkillError::Io)?).map_err(SkillError::Toml)
 }
 
 impl HookConfig {
@@ -90,6 +94,69 @@ const fn event_key(event: HookEvent) -> &'static str {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookResult {
+    pub event: HookEvent,
+    pub command: String,
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[async_trait]
+pub trait HookRunner: Send + Sync {
+    async fn run(&self, event: HookEvent, command: &str) -> Result<HookResult, SkillError>;
+}
+
+/// Executes configured hooks through an explicit permission policy.
+pub struct PermissionedHookRunner {
+    root: PathBuf,
+    policy: Arc<dyn PermissionPolicy>,
+}
+
+impl PermissionedHookRunner {
+    #[must_use]
+    pub fn new(root: impl Into<PathBuf>, policy: Arc<dyn PermissionPolicy>) -> Self {
+        Self { root: root.into(), policy }
+    }
+}
+
+#[async_trait]
+impl HookRunner for PermissionedHookRunner {
+    async fn run(&self, event: HookEvent, command: &str) -> Result<HookResult, SkillError> {
+        enforce(
+            self.policy.as_ref(),
+            &PermissionRequest::new(format!("hooks.{}", event_key(event))),
+        )?;
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .current_dir(&self.root)
+            .output()
+            .await
+            .map_err(SkillError::Io)?;
+        Ok(HookResult {
+            event,
+            command: command.to_owned(),
+            success: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+}
+
+pub async fn execute_hooks(
+    config: &HookConfig,
+    runner: &dyn HookRunner,
+    event: HookEvent,
+) -> Result<Vec<HookResult>, SkillError> {
+    let mut results = Vec::new();
+    for command in config.commands(event) {
+        results.push(runner.run(event, command).await?);
+    }
+    Ok(results)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentTemplate {
     pub name: String,
@@ -101,20 +168,12 @@ pub struct AgentTemplate {
     pub skills: Vec<String>,
 }
 
-pub fn load_agent_template(
-    root: impl AsRef<Path>,
-    name: &str,
-) -> Result<AgentTemplate, SkillError> {
-    let path = root
-        .as_ref()
-        .join(".nexus")
-        .join("agents")
-        .join(format!("{name}.toml"));
+pub fn load_agent_template(root: impl AsRef<Path>, name: &str) -> Result<AgentTemplate, SkillError> {
+    let path = root.as_ref().join(".nexus").join("agents").join(format!("{name}.toml"));
     if !path.exists() {
         return Err(SkillError::TemplateNotFound(name.to_owned()));
     }
-    let raw = fs::read_to_string(path).map_err(SkillError::Io)?;
-    toml::from_str(&raw).map_err(SkillError::Toml)
+    toml::from_str(&fs::read_to_string(path).map_err(SkillError::Io)?).map_err(SkillError::Toml)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -123,6 +182,8 @@ pub enum SkillError {
     NotFound(String),
     #[error("agent template not found: {0}")]
     TemplateNotFound(String),
+    #[error(transparent)]
+    Permission(#[from] PermissionError),
     #[error("skills I/O failed: {0}")]
     Io(std::io::Error),
     #[error("invalid skills configuration: {0}")]
@@ -135,7 +196,6 @@ mod tests {
 
     #[test]
     fn missing_hook_returns_empty_command_list() {
-        let config = HookConfig::default();
-        assert!(config.commands(HookEvent::BeforeTool).is_empty());
+        assert!(HookConfig::default().commands(HookEvent::BeforeTool).is_empty());
     }
 }
