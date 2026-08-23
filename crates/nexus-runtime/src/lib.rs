@@ -8,9 +8,7 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use nexus_config::Config;
 use nexus_core::Task;
-use nexus_models::{
-    ModelError, ModelId, ModelProvider, ModelRequest, ModelStreamEvent, Usage,
-};
+use nexus_models::{ModelError, ModelId, ModelProvider, ModelRequest, ModelStreamEvent, Usage};
 
 #[derive(Debug, Clone)]
 pub struct RunResult {
