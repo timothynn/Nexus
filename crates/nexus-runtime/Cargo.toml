@@ -15,9 +15,11 @@ nexus-core = { path = "../nexus-core" }
 nexus-models = { path = "../nexus-models" }
 nexus-permissions = { path = "../nexus-permissions" }
 nexus-tools = { path = "../nexus-tools" }
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 
 [lints]
 workspace = true
