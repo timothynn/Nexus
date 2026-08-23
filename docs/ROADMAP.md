@@ -4,11 +4,11 @@
 
 Nexus is being implemented as a reliable execution harness before expanding into desktop UI or broad automation features:
 
-1. **Execution core** — model contracts, tool registry, permissions, auditability, cancellation.
+1. **Execution core** — model contracts, tool loops, permissions, auditability, cancellation.
 2. **Workspace isolation** — Git worktrees for safe parallel coding agents.
 3. **Real model providers** — OpenAI-compatible first, then additional local/cloud adapters.
-4. **Context engineering** — repository discovery, instructions, indexing, token budgets, context inspection.
-5. **Sessions and replay** — durable runs, tool history, diffs, metrics, and reproducibility.
+4. **Configuration and sessions** — project settings, durable runs, replay, and diagnostics.
+5. **Context engineering** — repository discovery, instructions, indexing, token budgets, context inspection.
 6. **Parallel agents** — subagents orchestrated over isolated workspaces.
 7. **Extensibility** — MCP, skills, hooks, plugins, and SDKs.
 8. **Interfaces** — TUI, desktop, IDE integration, and remote workers.
@@ -27,23 +27,30 @@ Nexus is being implemented as a reliable execution harness before expanding into
 - [x] Provider trait
 - [x] Model capabilities
 - [x] Streaming events
+- [x] Provider-neutral tool definitions
+- [x] Provider-neutral tool call responses
+- [x] Tool result messages with call correlation
 - [x] Mock provider
 - [x] Basic runtime model execution
 - [x] Streaming runtime execution
+- [x] Bounded model-driven tool loop
 - [ ] Agent configuration
 - [ ] First real provider adapter
 - [ ] Provider registry in the CLI
 
 ### Milestone 3: Tools and permissions
 - [x] Tool registry
-- [x] Tool metadata and lifecycle contracts
+- [x] Tool metadata and JSON schemas
 - [x] Workspace-rooted filesystem read tool
+- [x] Structured shell tool with direct program/argument execution
+- [x] Workspace-bounded shell working directory
+- [x] Tool timeout limits
 - [x] Permission evaluation
 - [x] Explicit allow / ask / deny / sandbox enforcement
-- [ ] Shell tool with structured arguments and timeout
-- [ ] Interactive approval flow
+- [x] Pluggable approval boundary for `ask`
+- [x] Runtime enforcement before every tool execution
+- [ ] CLI/desktop approval UX
 - [ ] Execution audit event store
-- [ ] Tool loop integrated into model-driven agent execution
 - [ ] Cancellation propagation
 
 ### Milestone 4: Workspace isolation
@@ -74,22 +81,27 @@ Task
   → Config
   → Agent Runtime
   → Model
-  → Permission Check
-  → Tool Registry
-  → Tool Execution
-  → Run Events
-  → Session
-  → Result
+  → Tool Call?
+      ├── no → Result
+      └── yes
+            → Permission Check
+            → Approval Boundary (when needed)
+            → Tool Execution
+            → Tool Result
+            → Model
 ```
 
-The first release target is a genuinely usable CLI before expanding into TUI, desktop, MCP, plugins, workflows, or multi-agent orchestration.
+The next milestone is making this vertical slice usable from the CLI with a real provider, built-in workspace tools, and durable execution traces.
 
 ## Phase 2 — Developer Harness
 
 - [ ] OpenAI-compatible provider
+- [ ] Provider configuration and environment diagnostics
+- [ ] Built-in coding agent tool bundle
+- [ ] CLI approval prompts
 - [ ] Repository context discovery
 - [ ] Hierarchical instructions
-- [ ] Code search and indexing
+- [ ] Code indexing and search
 - [ ] Git-aware context and diff review
 - [ ] Context inspector and token budgets
 - [ ] Local session persistence and replay
@@ -101,7 +113,7 @@ The first release target is a genuinely usable CLI before expanding into TUI, de
 
 ## Phase 3 — Reliable Agent Platform
 
-- [ ] Model-driven tool loop
+- [x] Model-driven tool loop foundation
 - [ ] Parallel subagents
 - [ ] One isolated workspace per coding agent
 - [ ] Supervisor and reviewer patterns
