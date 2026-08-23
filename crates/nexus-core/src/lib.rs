@@ -28,6 +28,9 @@ pub struct Task {
 impl Task {
     #[must_use]
     pub fn new(prompt: impl Into<String>) -> Self {
-        Self { id: Uuid::new_v4(), prompt: prompt.into() }
+        Self {
+            id: Uuid::new_v4(),
+            prompt: prompt.into(),
+        }
     }
 }

@@ -14,6 +14,8 @@ fn default_agent_name() -> String {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { default_agent: default_agent_name() }
+        Self {
+            default_agent: default_agent_name(),
+        }
     }
 }

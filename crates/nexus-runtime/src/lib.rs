@@ -1,6 +1,5 @@
 //! Agent execution loop. Concrete models and tools plug into this layer later.
 
-use anyhow::Result;
 use nexus_config::Config;
 use nexus_core::Task;
 
@@ -19,13 +18,14 @@ impl AgentRuntime {
         Self { config }
     }
 
-    pub async fn run(&self, prompt: &str) -> Result<RunResult> {
+    #[must_use]
+    pub fn run(&self, prompt: &str) -> RunResult {
         let task = Task::new(prompt);
-        Ok(RunResult {
+        RunResult {
             message: format!(
                 "Nexus [{}] accepted task {}: {}",
                 self.config.default_agent, task.id, task.prompt
             ),
-        })
+        }
     }
 }

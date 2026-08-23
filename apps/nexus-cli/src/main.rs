@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
         Some(Command::Run { task }) => {
             let config = Config::default();
             let runtime = AgentRuntime::new(config);
-            let result = runtime.run(&task).await?;
+            let result = runtime.run(&task);
             println!("{}", result.message);
         }
         Some(Command::Config) => {
