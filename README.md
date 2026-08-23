@@ -4,7 +4,7 @@
 
 ### The programmable AI harness for developers, agents, and autonomous workflows.
 
-**Local-first · Model-agnostic · Tool-native · Transparent by design**
+**Local-first · Model-agnostic · Tool-native · Workspace-isolated · Transparent by design**
 
 [![Rust](https://img.shields.io/badge/Rust-2024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![CI](https://github.com/timothynn/Nexus/actions/workflows/ci.yml/badge.svg)](https://github.com/timothynn/Nexus/actions/workflows/ci.yml)
@@ -12,7 +12,7 @@
 [![Issues](https://img.shields.io/github/issues/timothynn/Nexus)](https://github.com/timothynn/Nexus/issues)
 [![PRs](https://img.shields.io/github/issues-pr/timothynn/Nexus)](https://github.com/timothynn/Nexus/pulls)
 
-[**Get Started**](#-quick-start) · [**Architecture**](#-architecture) · [**Roadmap**](#-roadmap) · [**Contributing**](#-contributing)
+[**Get Started**](#-quick-start) · [**What's Working**](#-whats-working-now) · [**Workspaces**](#-isolated-git-workspaces) · [**Architecture**](#-architecture) · [**Roadmap**](#-roadmap) · [**Contributing**](#-contributing)
 
 </div>
 
@@ -20,7 +20,7 @@
 
 > **Nexus is not just another AI chat app.**
 >
-> It is a configurable AI runtime where models, agents, tools, permissions, context, memory, workflows, and interfaces are composable primitives.
+> It is a configurable AI runtime where models, agents, tools, permissions, context, memory, workflows, workspaces, and interfaces are composable primitives.
 
 ## ⚡ Why Nexus?
 
@@ -30,7 +30,7 @@ flowchart LR
     N --> A[Agents]
     N --> M[Models]
     N --> T[Tools]
-    N --> W[Workflows]
+    N --> W[Workspaces]
     N --> P[Permissions]
 
     A --> R[Transparent Execution]
@@ -44,7 +44,7 @@ Nexus is being built around one core idea:
 
 > **AI should be powerful without being a black box.**
 
-At runtime, Nexus should make it possible to inspect **what the agent is doing, why it is doing it, which model it selected, what context it received, which tools it can access, and what permissions apply**.
+At runtime, Nexus should make it possible to inspect **what the agent is doing, why it is doing it, which model it selected, what context it received, which tools it can access, what workspace it is operating in, and what permissions apply**.
 
 ## ✨ Design Goals
 
@@ -52,15 +52,16 @@ At runtime, Nexus should make it possible to inspect **what the agent is doing, 
 |---|---|---|
 | 🧩 | **Composable** | Build custom agent pipelines from small, explicit primitives. |
 | 🧠 | **Model-agnostic** | Avoid coupling Nexus to a single AI provider. |
-| 🔍 | **Transparent** | Inspect context, tool calls, costs, events, and execution history. |
+| 🔍 | **Transparent** | Inspect context, tool calls, costs, events, workspaces, and execution history. |
 | 🛡️ | **Permission-aware** | Keep powerful tools behind explicit, configurable policies. |
+| 🌳 | **Workspace-isolated** | Give coding agents isolated Git worktrees instead of sharing one checkout. |
 | 🏠 | **Local-first** | Keep local workflows and sensitive operations on the user's machine. |
-| ⚙️ | **Highly configurable** | Configure behavior globally, per project, per agent, or per run. |
+| ⚙️ | **Highly configurable** | Configure behavior globally, per project, per agent, workspace, or run. |
 | 🔌 | **Extensible** | Future support for MCP, plugins, skills, hooks, and custom providers. |
 
 ## 🚀 Quick Start
 
-> **Current state:** Nexus is in its early Phase 1 bootstrap. The workspace and core contracts are actively being implemented.
+> **Current state:** Nexus has moved beyond the bootstrap. The model gateway, streaming runtime, tool registry, permission enforcement, and isolated Git workspace foundation are implemented. The next milestone is connecting these primitives into a full model-driven tool loop.
 
 ### Prerequisites
 
@@ -81,33 +82,110 @@ cargo build --workspace
 cargo run -p nexus-cli -- run "inspect this repository"
 ```
 
-### Check the development environment
+### Stream a run
+
+```bash
+cargo run -p nexus-cli -- run --stream "explain this codebase"
+```
+
+### Inspect the environment
 
 ```bash
 cargo run -p nexus-cli -- doctor
 ```
 
-### Useful commands
+## 🟢 What's Working Now
 
-| Command | Purpose |
-|---|---|
-| `nexus run "..."` | Run a task through the Nexus runtime |
-| `nexus config` | Inspect the configuration boundary |
-| `nexus doctor` | Run environment diagnostics |
-| `cargo test --workspace` | Run workspace tests |
-| `cargo fmt --all -- --check` | Verify formatting |
-| `cargo clippy --workspace --all-targets -- -D warnings` | Run strict linting |
+### Model gateway
 
-<details>
-<summary><strong>💡 Prefer running from source?</strong></summary>
+- Provider-neutral `ModelProvider` contract
+- Model identities and capabilities
+- Structured chat requests and responses
+- Streaming model events
+- Provider registry
+- Deterministic mock provider for local development and tests
+- Runtime execution for normal and streaming responses
 
-During early development, the CLI can be run directly through Cargo:
+### Tool foundation
 
-```bash
-cargo run -p nexus-cli -- --help
+- Tool registry with duplicate protection and discovery
+- Structured JSON tool requests and responses
+- Tool metadata for future model capability discovery
+- Tool lifecycle contract
+- Workspace-rooted filesystem read tool
+
+### Permission foundation
+
+- Explicit `allow`, `ask`, `deny`, and `sandbox` decisions
+- Rule-based policies
+- Exact and wildcard action rules such as `filesystem.*`
+- `ask` is never silently converted into `allow`
+- Explicit enforcement errors ready for an approval UI or CLI flow
+
+### Isolated Git workspaces
+
+- Dedicated `nexus-workspace` crate
+- Git worktrees created under `.nexus/worktrees/`
+- Isolated `nexus/<workspace-name>` branches
+- Workspace listing
+- Status inspection
+- Diff inspection
+- Safe removal
+- **No automatic merge into the user's main checkout**
+
+## 🌳 Isolated Git Workspaces
+
+Worktree isolation is a core Nexus primitive for future parallel agents.
+
+```mermaid
+flowchart TD
+    R[Repository] --> H[Human checkout]
+    R --> A[.nexus/worktrees/agent-a]
+    R --> B[.nexus/worktrees/agent-b]
+    R --> V[.nexus/worktrees/reviewer]
+
+    A --> AA[Agent A]
+    B --> AB[Agent B]
+    V --> AR[Review Agent]
 ```
 
-A packaged installation flow will be added later, once the CLI surface stabilizes.
+Create an isolated workspace:
+
+```bash
+nexus worktree create auth-refactor
+```
+
+List Nexus-managed workspaces:
+
+```bash
+nexus worktree list
+```
+
+Inspect changes without switching branches:
+
+```bash
+nexus worktree status auth-refactor
+nexus worktree diff auth-refactor
+```
+
+Remove a workspace:
+
+```bash
+nexus worktree remove auth-refactor
+```
+
+Force removal when Git refuses because of local changes:
+
+```bash
+nexus worktree remove auth-refactor --force
+```
+
+<details>
+<summary><strong>Why worktrees instead of temporary clones?</strong></summary>
+
+Git worktrees are lightweight and share the repository object database while giving each agent an independent working directory and branch. That makes them a strong foundation for parallel coding agents, review agents, experiment branches, and reproducible agent runs.
+
+Nexus intentionally treats the worktree as a first-class **workspace abstraction**. Git worktrees are only the first backend; future implementations can target containers, remote machines, or sandboxed workers without changing the higher-level agent model.
 
 </details>
 
@@ -123,10 +201,11 @@ crates/
 ├── nexus-core/                Stable domain types and contracts
 ├── nexus-config/              Configuration loading and resolution
 ├── nexus-models/              Provider-neutral model contracts
-├── nexus-tools/               Tool contracts and execution boundaries
-├── nexus-permissions/         Policy evaluation and approval contracts
+├── nexus-tools/               Tool registry and local tool boundaries
+├── nexus-permissions/         Policy evaluation and enforcement
 ├── nexus-runtime/             Agent execution loop and orchestration
-└── nexus-storage/             Session and persistence contracts
+├── nexus-storage/             Session and persistence contracts
+└── nexus-workspace/           Isolated workspace implementations
 ```
 
 ### Dependency flow
@@ -134,6 +213,7 @@ crates/
 ```mermaid
 flowchart TD
     CLI[nexus-cli] --> RT[nexus-runtime]
+    CLI --> WS[nexus-workspace]
     RT --> CORE[nexus-core]
     RT --> MODELS[nexus-models]
     RT --> TOOLS[nexus-tools]
@@ -146,6 +226,7 @@ flowchart TD
     PERMS --> CORE
     CONFIG --> CORE
     STORAGE --> CORE
+    WS --> CORE
 ```
 
 **Architectural rule:** `nexus-core` stays dependency-light and defines the stable language shared by the rest of the system.
@@ -153,46 +234,43 @@ flowchart TD
 <details>
 <summary><strong>🧠 Why this structure?</strong></summary>
 
-Nexus is expected to grow from a coding-agent runtime into a broader AI platform. Keeping models, tools, permissions, storage, and interfaces behind explicit contracts prevents provider-specific or UI-specific code from leaking into the core.
+Nexus is expected to grow from a coding-agent runtime into a broader AI platform. Keeping models, tools, permissions, storage, workspaces, and interfaces behind explicit contracts prevents provider-specific or UI-specific code from leaking into the core.
 
-That makes future additions—desktop UI, TUI, MCP, plugins, skills, remote workers, and additional model providers—extensions rather than rewrites.
+That makes future additions—TUI, desktop UI, MCP, plugins, skills, remote workers, additional model providers, and sandbox backends—extensions rather than rewrites.
 
 </details>
 
 ## 🔄 The Nexus Execution Model
 
-The initial runtime is designed around a visible execution lifecycle:
+The implemented foundation is converging on this lifecycle:
 
 ```mermaid
 sequenceDiagram
     participant U as User
     participant C as CLI / UI
     participant R as Runtime
-    participant A as Agent
     participant M as Model
     participant P as Permissions
     participant T as Tools
+    participant W as Workspace
     participant S as Storage
 
     U->>C: Submit task
     C->>R: Create run
-    R->>A: Resolve agent
-    A->>M: Request inference
-    M-->>A: Stream events
-    A->>P: Check tool permission
-    P-->>A: Allow / Ask / Deny
-    A->>T: Execute approved tool
-    T-->>A: Tool result
-    A->>S: Persist run events
-    A-->>C: Final result
-    C-->>U: Response + trace
+    R->>W: Resolve isolated workspace
+    R->>M: Request inference
+    M-->>R: Stream events
+    R->>P: Check requested action
+    P-->>R: Allow / Ask / Deny / Sandbox
+    R->>T: Execute approved tool
+    T-->>R: Tool result
+    R->>S: Persist run events
+    R-->>C: Final result + trace
 ```
 
-The goal is for every stage of this flow to eventually be inspectable and configurable.
+> The model-driven tool loop and persistent trace store are the next pieces needed to make this entire sequence executable end-to-end.
 
 ## 🧩 Core Primitives
-
-Nexus is evolving around the following primitives:
 
 ```text
 Agent
@@ -202,6 +280,7 @@ Agent
  ├── Context Rules
  ├── Tools
  ├── Permissions
+ ├── Workspace
  ├── Memory
  ├── Skills
  └── Execution Policy
@@ -212,44 +291,10 @@ Run
  ├── Model Events
  ├── Tool Events
  ├── Permission Decisions
+ ├── Workspace Diff
  ├── Costs & Metrics
  └── Final Result
 ```
-
-### Planned model capabilities
-
-- Manual model selection
-- Provider abstraction
-- Streaming responses
-- Capability discovery
-- Fallback models
-- Cost-aware routing
-- Latency-aware routing
-- Multi-model workflows
-- Local and cloud model support
-
-### Planned tool capabilities
-
-- Filesystem access
-- Shell execution
-- Git integration
-- Code search and indexing
-- Structured tool schemas
-- Streaming tool output
-- Cancellation and timeouts
-- Sandboxing
-- Audit history
-
-### Planned extensibility
-
-- MCP servers
-- Plugins
-- Skills
-- Hooks
-- Custom tools
-- Custom model providers
-- Workflow nodes
-- UI extensions
 
 ## ⚙️ Configuration Philosophy
 
@@ -269,7 +314,7 @@ User Configuration
 Built-in Defaults
 ```
 
-Example future configuration:
+Example target configuration:
 
 ```yaml
 agent:
@@ -281,90 +326,84 @@ permissions:
   filesystem: allow
   network: ask
 
+workspace:
+  strategy: worktree
+
 context:
   strategy: hybrid
 ```
 
-<details>
-<summary><strong>🔎 The long-term goal: config explainability</strong></summary>
-
-Nexus will eventually provide a command similar to:
-
-```bash
-nexus config explain permissions.terminal
-```
-
-The output should explain not only the active value, but **where it came from and why it won during configuration resolution**.
-
-</details>
-
 ## 🗺️ Roadmap
 
-### Phase 1 — Core MVP
+### Phase 1 — Execution Core
 
 - [x] Rust workspace and crate boundaries
 - [x] Initial CLI scaffold
 - [x] Core domain contracts
 - [x] Configuration boundary
 - [x] Model provider contracts
-- [x] Tool contracts
-- [x] Permission contracts
-- [x] Runtime vertical slice
-- [x] Session storage boundary
-- [x] CI workflow
-- [ ] Streaming model execution
-- [ ] First concrete model provider
-- [ ] Tool registry
-- [ ] Filesystem tool
-- [ ] Shell tool
-- [ ] Permission enforcement
+- [x] Streaming model execution
+- [x] Mock provider
+- [x] Tool registry
+- [x] Filesystem read tool
+- [x] Permission evaluation and enforcement
+- [x] Isolated Git worktree lifecycle
+- [ ] Shell tool with structured arguments and timeout
+- [ ] Interactive approval flow
+- [ ] Model-driven tool loop
+- [ ] Cancellation and timeout propagation
+- [ ] Execution audit events
 - [ ] Local session persistence
-- [ ] End-to-end agent run
+- [ ] End-to-end agent run with tools
 
-### Phase 2 — Developer Harness
+### Phase 2 — Context + Real Providers
 
-- [ ] TUI
-- [ ] Repository indexing
-- [ ] Context engine
-- [ ] Git-aware workflows
-- [ ] Diff review
-- [ ] Agent templates
-- [ ] MCP client support
-- [ ] Skills and hooks
-- [ ] Model routing
-
-### Phase 3 — Nexus Desktop
-
-- [ ] Tauri desktop application
-- [ ] Customizable workspace
-- [ ] Visual agent management
+- [ ] OpenAI-compatible provider
+- [ ] Provider configuration and model selection
+- [ ] Repository discovery
+- [ ] Hierarchical instructions
+- [ ] Code indexing and search
+- [ ] Git-aware context
+- [ ] Token budgets
 - [ ] Context inspector
-- [ ] Run replay
-- [ ] Plugin manager
-- [ ] Workflow editor
+- [ ] SQLite sessions and replay
+- [ ] TUI
 
-### Phase 4 — Agent Platform
+### Phase 3 — Parallel Agents
 
-- [ ] Multi-agent orchestration
-- [ ] Remote workers
-- [ ] Automation triggers
+- [ ] Subagents and task graphs
+- [ ] Parallel execution
+- [ ] One isolated workspace per coding agent
+- [ ] Supervisor and reviewer patterns
+- [ ] Workspace metadata and cleanup policies
+- [ ] Sandboxed/container workspace backends
+
+### Phase 4 — Extensibility + Desktop
+
+- [ ] MCP client support
+- [ ] Skills
+- [ ] Hooks
+- [ ] Plugin system
 - [ ] Public SDKs
-- [ ] Plugin ecosystem
-- [ ] Skill registry
+- [ ] Tauri desktop application
+- [ ] Customizable workspace UI
+- [ ] Remote workers
 - [ ] Team collaboration
 
 ## 📊 Project Status
 
 | Area | Status |
 |---|---|
-| Workspace architecture | 🟢 Bootstrapped |
-| CLI | 🟢 Initial scaffold |
-| Core contracts | 🟢 Initial scaffold |
-| Model gateway | 🟡 Contracts defined |
-| Agent runtime | 🟡 Vertical slice |
-| Tool execution | 🟡 Contracts defined |
-| Permissions | 🟡 Contracts defined |
-| Persistence | 🟡 Contracts defined |
+| Workspace architecture | 🟢 Implemented |
+| CLI | 🟢 Working foundation |
+| Core contracts | 🟢 Implemented |
+| Model gateway | 🟢 Contracts + mock + streaming |
+| Agent runtime | 🟡 Model execution only |
+| Tool execution | 🟡 Registry + filesystem tool |
+| Permissions | 🟢 Policies + enforcement |
+| Git workspaces | 🟢 Lifecycle foundation |
+| Persistence | 🟡 Contracts only |
+| Context engine | ⚪ Planned |
 | MCP | ⚪ Planned |
 | Plugins | ⚪ Planned |
 | TUI | ⚪ Planned |
@@ -401,7 +440,8 @@ A good contribution should:
 3. Prefer explicit contracts over hidden assumptions.
 4. Include tests where behavior is introduced.
 5. Keep execution observable.
-6. Consider cancellation, errors, and permissions as first-class concerns.
+6. Treat workspace isolation and permissions as first-class concerns.
+7. Never silently merge autonomous agent changes into a user's branch.
 
 Before opening a large feature, check the existing architecture and roadmap documents under `docs/`.
 
@@ -409,7 +449,7 @@ Before opening a large feature, check the existing architecture and roadmap docu
 
 > **Don't build an AI assistant that locks developers into one workflow. Build the primitives that let developers create their own.**
 
-Nexus aims to become a programmable layer between humans, AI models, tools, and autonomous systems.
+Nexus aims to become a programmable layer between humans, AI models, tools, workspaces, and autonomous systems.
 
 ---
 
