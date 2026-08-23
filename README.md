@@ -12,7 +12,7 @@
 [![Issues](https://img.shields.io/github/issues/timothynn/Nexus)](https://github.com/timothynn/Nexus/issues)
 [![PRs](https://img.shields.io/github/issues-pr/timothynn/Nexus)](https://github.com/timothynn/Nexus/pulls)
 
-[**Get Started**](#-quick-start) · [**What's Working**](#-whats-working-now) · [**Workspaces**](#-isolated-git-workspaces) · [**Architecture**](#-architecture) · [**Roadmap**](#-roadmap) · [**Contributing**](#-contributing)
+[**Get Started**](#-quick-start) · [**What's Working**](#-whats-working-now) · [**Execution Loop**](#-model-driven-tool-loop) · [**Workspaces**](#-isolated-git-workspaces) · [**Architecture**](#-architecture) · [**Roadmap**](#-roadmap) · [**Contributing**](#-contributing)
 
 </div>
 
@@ -61,7 +61,7 @@ At runtime, Nexus should make it possible to inspect **what the agent is doing, 
 
 ## 🚀 Quick Start
 
-> **Current state:** Nexus has moved beyond the bootstrap. The model gateway, streaming runtime, tool registry, permission enforcement, and isolated Git workspace foundation are implemented. The next milestone is connecting these primitives into a full model-driven tool loop.
+> **Current state:** Nexus now has a bounded model-driven tool loop. The runtime can expose provider-neutral tool schemas, receive structured tool calls, enforce permissions, execute approved tools, feed results back to the model, and stop at an explicit step limit. The next major milestone is a real provider and a usable end-to-end coding-agent CLI.
 
 ### Prerequisites
 
@@ -102,17 +102,34 @@ cargo run -p nexus-cli -- doctor
 - Model identities and capabilities
 - Structured chat requests and responses
 - Streaming model events
+- Provider-neutral tool definitions and JSON schemas
+- Provider-neutral structured tool call responses
+- Correlated tool result messages
 - Provider registry
 - Deterministic mock provider for local development and tests
 - Runtime execution for normal and streaming responses
+
+### Model-driven tool loop
+
+- Bounded multi-step agent loop
+- Tool definitions sent with model requests
+- Structured model tool calls
+- Tool results fed back into conversation state
+- Aggregated token usage across steps
+- Explicit maximum-step protection
+- Provider capability checks before tool execution
 
 ### Tool foundation
 
 - Tool registry with duplicate protection and discovery
 - Structured JSON tool requests and responses
-- Tool metadata for future model capability discovery
+- Tool metadata and input schemas
 - Tool lifecycle contract
 - Workspace-rooted filesystem read tool
+- Structured `shell.execute` tool
+- Direct program + argument execution with **no command shell interpolation**
+- Workspace-bounded working directories
+- Configurable execution timeout with an upper policy limit
 
 ### Permission foundation
 
@@ -120,7 +137,8 @@ cargo run -p nexus-cli -- doctor
 - Rule-based policies
 - Exact and wildcard action rules such as `filesystem.*`
 - `ask` is never silently converted into `allow`
-- Explicit enforcement errors ready for an approval UI or CLI flow
+- Pluggable approval boundary for CLI, desktop, IDE, or remote approval UX
+- Runtime enforcement before every registered tool execution
 
 ### Isolated Git workspaces
 
@@ -132,6 +150,48 @@ cargo run -p nexus-cli -- doctor
 - Diff inspection
 - Safe removal
 - **No automatic merge into the user's main checkout**
+
+## 🔄 Model-Driven Tool Loop
+
+The core agent execution path is now implemented:
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant R as Runtime
+    participant M as Model
+    participant P as Permission Policy
+    participant A as Approver
+    participant T as Tool
+
+    U->>R: Submit task
+    R->>M: Request + available tools
+    M-->>R: Tool call or final answer
+
+    alt Tool call
+        R->>P: Evaluate action
+        P-->>R: Allow / Ask / Deny / Sandbox
+        opt Ask
+            R->>A: Request approval
+            A-->>R: Approve or reject
+        end
+        R->>T: Execute approved call
+        T-->>R: Structured result
+        R->>M: Continue with tool result
+    else Final answer
+        R-->>U: Return result
+    end
+```
+
+The loop is intentionally bounded:
+
+```text
+Task → Model → Tool Call? → Permission → Approval? → Tool → Result → Model
+                         ↑                                  │
+                         └──────── until final answer ────────┘
+```
+
+A run that keeps requesting tools past its configured limit fails explicitly instead of looping forever.
 
 ## 🌳 Isolated Git Workspaces
 
@@ -240,36 +300,6 @@ That makes future additions—TUI, desktop UI, MCP, plugins, skills, remote work
 
 </details>
 
-## 🔄 The Nexus Execution Model
-
-The implemented foundation is converging on this lifecycle:
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant C as CLI / UI
-    participant R as Runtime
-    participant M as Model
-    participant P as Permissions
-    participant T as Tools
-    participant W as Workspace
-    participant S as Storage
-
-    U->>C: Submit task
-    C->>R: Create run
-    R->>W: Resolve isolated workspace
-    R->>M: Request inference
-    M-->>R: Stream events
-    R->>P: Check requested action
-    P-->>R: Allow / Ask / Deny / Sandbox
-    R->>T: Execute approved tool
-    T-->>R: Tool result
-    R->>S: Persist run events
-    R-->>C: Final result + trace
-```
-
-> The model-driven tool loop and persistent trace store are the next pieces needed to make this entire sequence executable end-to-end.
-
 ## 🧩 Core Primitives
 
 ```text
@@ -344,17 +374,18 @@ context:
 - [x] Model provider contracts
 - [x] Streaming model execution
 - [x] Mock provider
-- [x] Tool registry
+- [x] Tool registry and JSON schemas
 - [x] Filesystem read tool
+- [x] Structured shell tool with timeout limits
 - [x] Permission evaluation and enforcement
+- [x] Pluggable approval boundary
+- [x] Bounded model-driven tool loop
 - [x] Isolated Git worktree lifecycle
-- [ ] Shell tool with structured arguments and timeout
-- [ ] Interactive approval flow
-- [ ] Model-driven tool loop
-- [ ] Cancellation and timeout propagation
+- [ ] CLI approval UX
+- [ ] Cancellation and timeout propagation through runs
 - [ ] Execution audit events
 - [ ] Local session persistence
-- [ ] End-to-end agent run with tools
+- [ ] End-to-end CLI agent with a real provider
 
 ### Phase 2 — Context + Real Providers
 
@@ -397,10 +428,10 @@ context:
 | Workspace architecture | 🟢 Implemented |
 | CLI | 🟢 Working foundation |
 | Core contracts | 🟢 Implemented |
-| Model gateway | 🟢 Contracts + mock + streaming |
-| Agent runtime | 🟡 Model execution only |
-| Tool execution | 🟡 Registry + filesystem tool |
-| Permissions | 🟢 Policies + enforcement |
+| Model gateway | 🟢 Contracts + streaming + tool calls |
+| Agent runtime | 🟢 Bounded tool loop foundation |
+| Tool execution | 🟢 Filesystem + structured shell tools |
+| Permissions | 🟢 Policies + approval boundary + enforcement |
 | Git workspaces | 🟢 Lifecycle foundation |
 | Persistence | 🟡 Contracts only |
 | Context engine | ⚪ Planned |
@@ -427,7 +458,7 @@ cargo test --workspace
 cargo build --workspace
 ```
 
-The repository CI is intended to enforce the same quality gates before changes are merged.
+The repository CI enforces the same quality gates before changes are merged.
 
 ## 🤝 Contributing
 
