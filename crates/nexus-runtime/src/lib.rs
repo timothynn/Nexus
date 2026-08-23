@@ -29,7 +29,11 @@ pub struct AgentRuntime {
 
 impl AgentRuntime {
     #[must_use]
-    pub fn new(config: Config, provider: Arc<dyn ModelProvider>, model: impl Into<ModelId>) -> Self {
+    pub fn new(
+        config: Config,
+        provider: Arc<dyn ModelProvider>,
+        model: impl Into<ModelId>,
+    ) -> Self {
         Self {
             config,
             provider,
@@ -51,7 +55,11 @@ impl AgentRuntime {
         })
     }
 
-    pub async fn run_streaming<F>(&self, prompt: &str, mut on_event: F) -> Result<RunResult, RuntimeError>
+    pub async fn run_streaming<F>(
+        &self,
+        prompt: &str,
+        mut on_event: F,
+    ) -> Result<RunResult, RuntimeError>
     where
         F: FnMut(&ModelStreamEvent),
     {
@@ -66,7 +74,9 @@ impl AgentRuntime {
             let event = event?;
             match &event {
                 ModelStreamEvent::Delta { content } => message.push_str(content),
-                ModelStreamEvent::Completed { usage: completed_usage } => {
+                ModelStreamEvent::Completed {
+                    usage: completed_usage,
+                } => {
                     usage = completed_usage.clone();
                 }
                 ModelStreamEvent::Started { .. } => {}
@@ -112,7 +122,10 @@ mod tests {
             "mock-1",
         );
 
-        let result = runtime.run("explain the architecture").await.expect("run should succeed");
+        let result = runtime
+            .run("explain the architecture")
+            .await
+            .expect("run should succeed");
 
         assert_eq!(result.provider, "mock");
         assert!(result.message.contains("explain the architecture"));
