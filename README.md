@@ -30,6 +30,27 @@ export OPENAI_API_KEY="..."
 nexus run --provider openai-compatible --model "your-model-id" --tools --session "inspect this repository"
 ```
 
+## Embed Nexus in Rust
+
+Nexus now has a small public SDK facade for embedding the harness into another Rust application:
+
+```rust
+use std::sync::Arc;
+
+use nexus_models::MockModelProvider;
+use nexus_sdk::{Nexus, RunRequest};
+
+let nexus = Nexus::builder()
+    .provider(Arc::new(MockModelProvider::default()))
+    .model("mock-1")
+    .build()?;
+
+let result = nexus.run(RunRequest::new("inspect this repository")).await?;
+println!("{}", result.message);
+```
+
+The SDK intentionally starts small: builder-based configuration, provider/model injection, cancellable execution, and access to the advanced runtime seam. More specialized features remain available through the lower-level crates.
+
 # 🟢 What's Working Now
 
 ## Phase 1 — Execution Core ✅
@@ -84,7 +105,7 @@ MCP Server → tools/list → MCP Tool Adapter → ToolRegistry
 .nexus/hooks.toml
 ```
 
-Hooks now have a permission-aware execution seam. Every configured lifecycle command must pass a `PermissionPolicy`; denied or approval-required hooks cannot execute silently.
+Hooks have a permission-aware execution seam. Every configured lifecycle command must pass a `PermissionPolicy`; denied or approval-required hooks cannot execute silently.
 
 ### Plugins and capability boundaries
 
@@ -95,6 +116,16 @@ Project plugins live under:
 ```
 
 Each manifest declares its entrypoint and explicit capabilities, such as filesystem access, shell execution, network access, model access, workspace management, and session access. Nexus can therefore reject capability escalation instead of treating plugins as implicitly trusted code.
+
+### Public SDK foundation
+
+`nexus-sdk` is the stable embedding facade for applications that want to construct and run Nexus without coupling directly to the CLI. The initial API provides:
+
+- Builder-based configuration
+- Provider injection
+- Model selection
+- Cancellable run requests
+- Access to the advanced runtime seam
 
 # 🧬 Architecture
 
@@ -115,7 +146,8 @@ crates/
 ├── nexus-workspace/           Worktrees, review, cleanup, container backend
 ├── nexus-mcp/                 MCP client and Tool adapters
 ├── nexus-skills/              Skills, templates, and permissioned hooks
-└── nexus-plugins/             Plugin manifests and capability boundaries
+├── nexus-plugins/             Plugin manifests and capability boundaries
+└── nexus-sdk/                 Public embedding API
 ```
 
 # 🗺️ Roadmap
@@ -130,11 +162,12 @@ crates/
 - [x] Skills and templates
 - [x] Permission-controlled hook execution seam
 - [x] Plugin manifests and capability boundaries
-- [ ] Public SDK seams
+- [x] Public SDK foundation
 - [ ] CLI integration for unified multi-agent orchestration
 - [ ] Run-level observability across parallel workers
 - [ ] Container lifecycle management
-- [ ] TUI
+- [ ] Plugin runtime loading and capability enforcement
+- [ ] Interactive TUI
 - [ ] Tauri desktop application
 - [ ] Remote workers
 
