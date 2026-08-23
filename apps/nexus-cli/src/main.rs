@@ -1,10 +1,11 @@
-use std::sync::Arc;
+use std::{env, sync::Arc};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use nexus_config::Config;
 use nexus_models::{MockModelProvider, ModelStreamEvent};
 use nexus_runtime::AgentRuntime;
+use nexus_workspace::GitWorktreeManager;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
@@ -32,6 +33,34 @@ enum Command {
     Config,
     /// Display the runtime version and health.
     Doctor,
+    /// Manage isolated Git workspaces for agent runs.
+    Worktree {
+        #[command(subcommand)]
+        command: WorktreeCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum WorktreeCommand {
+    /// Create an isolated worktree on a Nexus-managed branch.
+    Create {
+        name: String,
+        /// Base commit or ref. Defaults to HEAD.
+        #[arg(long)]
+        base: Option<String>,
+    },
+    /// List Nexus-managed worktrees.
+    List,
+    /// Show the working tree status for an isolated workspace.
+    Status { name: String },
+    /// Show uncommitted changes inside an isolated workspace.
+    Diff { name: String },
+    /// Remove an isolated workspace. This never merges changes.
+    Remove {
+        name: String,
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -43,13 +72,13 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Some(Command::Run { task, stream, model }) => {
+        Some(Command::Run {
+            task,
+            stream,
+            model,
+        }) => {
             let config = Config::default();
-            let runtime = AgentRuntime::new(
-                config,
-                Arc::new(MockModelProvider::default()),
-                model,
-            );
+            let runtime = AgentRuntime::new(config, Arc::new(MockModelProvider::default()), model);
 
             if stream {
                 let result = runtime
@@ -86,7 +115,41 @@ async fn main() -> Result<()> {
         Some(Command::Doctor) => {
             println!("Nexus runtime: healthy");
             println!("Model gateway: healthy");
+            println!("Tool registry: available");
+            println!("Workspace isolation: Git worktrees available");
             println!("Default provider: mock");
+        }
+        Some(Command::Worktree { command }) => {
+            let repository = env::current_dir()?;
+            let manager = GitWorktreeManager::new(repository)?;
+            match command {
+                WorktreeCommand::Create { name, base } => {
+                    let worktree = manager.create(&name, base.as_deref())?;
+                    println!("Created workspace `{}`", worktree.name);
+                    println!("Branch: {}", worktree.branch);
+                    println!("Path: {}", worktree.path.display());
+                }
+                WorktreeCommand::List => {
+                    for worktree in manager.list()? {
+                        println!(
+                            "{}\t{}\t{}",
+                            worktree.name,
+                            worktree.branch,
+                            worktree.path.display()
+                        );
+                    }
+                }
+                WorktreeCommand::Status { name } => {
+                    println!("{}", manager.status(&name)?);
+                }
+                WorktreeCommand::Diff { name } => {
+                    println!("{}", manager.diff(&name)?);
+                }
+                WorktreeCommand::Remove { name, force } => {
+                    manager.remove(&name, force)?;
+                    println!("Removed workspace `{name}`. No changes were merged.");
+                }
+            }
         }
         None => {
             println!("Nexus {}", env!("CARGO_PKG_VERSION"));
