@@ -1,13 +1,14 @@
-//! Provider-neutral model contracts and a small provider registry.
+//! Provider-neutral model contracts and model provider adapters.
 //!
-//! Nexus keeps these types independent from any vendor SDK. Concrete providers
-//! translate their native request/response formats at the boundary.
+//! Nexus keeps domain types independent from vendor SDKs. Concrete providers
+//! translate native request/response formats at the boundary.
 
 use std::{collections::HashMap, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
 use futures_core::Stream;
 use futures_util::stream;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -78,6 +79,8 @@ pub struct ChatMessage {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ModelToolCall>,
 }
 
 impl ChatMessage {
@@ -88,6 +91,21 @@ impl ChatMessage {
             content: content.into(),
             name: None,
             tool_call_id: None,
+            tool_calls: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn assistant_with_tool_calls(
+        content: impl Into<String>,
+        tool_calls: Vec<ModelToolCall>,
+    ) -> Self {
+        Self {
+            role: MessageRole::Assistant,
+            content: content.into(),
+            name: None,
+            tool_call_id: None,
+            tool_calls,
         }
     }
 
@@ -102,6 +120,7 @@ impl ChatMessage {
             content: content.into(),
             name: Some(name.into()),
             tool_call_id: Some(tool_call_id.into()),
+            tool_calls: Vec::new(),
         }
     }
 }
@@ -298,15 +317,286 @@ impl ModelProvider for MockModelProvider {
     }
 }
 
+/// Provider for services that expose the OpenAI-compatible Chat Completions API.
+///
+/// This adapter is intentionally configured with a base URL instead of being
+/// coupled to one vendor. The same Nexus model/tool contracts can therefore be
+/// translated for self-hosted or third-party compatible endpoints.
+pub struct OpenAiCompatibleProvider {
+    name: String,
+    endpoint: String,
+    api_key: String,
+    client: Client,
+}
+
+impl OpenAiCompatibleProvider {
+    pub fn new(
+        name: impl Into<String>,
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+    ) -> Result<Self, ModelError> {
+        let name = name.into();
+        let base_url = base_url.into().trim_end_matches('/').to_owned();
+        let api_key = api_key.into();
+        if name.is_empty() || base_url.is_empty() || api_key.is_empty() {
+            return Err(ModelError::Provider(
+                "provider name, base URL, and API key must not be empty".to_owned(),
+            ));
+        }
+
+        Ok(Self {
+            name,
+            endpoint: format!("{base_url}/chat/completions"),
+            api_key,
+            client: Client::new(),
+        })
+    }
+
+    #[must_use]
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+}
+
+#[async_trait]
+impl ModelProvider for OpenAiCompatibleProvider {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::with_tool_calling()
+    }
+
+    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ModelError> {
+        let body = OpenAiCompatibleRequest::from(&request);
+        let response = self
+            .client
+            .post(&self.endpoint)
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| ModelError::Provider(error.to_string()))?
+            .error_for_status()
+            .map_err(|error| ModelError::Provider(error.to_string()))?
+            .json::<OpenAiCompatibleResponse>()
+            .await
+            .map_err(|error| ModelError::Provider(error.to_string()))?;
+
+        response.into_model_response(request.model)
+    }
+
+    async fn stream(&self, _request: ModelRequest) -> Result<ModelEventStream, ModelError> {
+        Err(ModelError::Unsupported(
+            "streaming for the OpenAI-compatible provider is not implemented yet".to_owned(),
+        ))
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiCompatibleRequest {
+    model: String,
+    messages: Vec<OpenAiCompatibleMessage>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<OpenAiCompatibleTool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+}
+
+impl From<&ModelRequest> for OpenAiCompatibleRequest {
+    fn from(request: &ModelRequest) -> Self {
+        Self {
+            model: request.model.0.clone(),
+            messages: request
+                .messages
+                .iter()
+                .map(OpenAiCompatibleMessage::from)
+                .collect(),
+            tools: request
+                .tools
+                .iter()
+                .map(OpenAiCompatibleTool::from)
+                .collect(),
+            temperature: request.temperature,
+            max_tokens: request.max_output_tokens,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiCompatibleMessage {
+    role: &'static str,
+    content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_calls: Vec<OpenAiCompatibleToolCall>,
+}
+
+impl From<&ChatMessage> for OpenAiCompatibleMessage {
+    fn from(message: &ChatMessage) -> Self {
+        let role = match message.role {
+            MessageRole::System => "system",
+            MessageRole::User => "user",
+            MessageRole::Assistant => "assistant",
+            MessageRole::Tool => "tool",
+        };
+        Self {
+            role,
+            content: message.content.clone(),
+            name: message.name.clone(),
+            tool_call_id: message.tool_call_id.clone(),
+            tool_calls: message
+                .tool_calls
+                .iter()
+                .map(OpenAiCompatibleToolCall::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiCompatibleTool {
+    r#type: &'static str,
+    function: OpenAiCompatibleFunctionDefinition,
+}
+
+impl From<&ModelToolDefinition> for OpenAiCompatibleTool {
+    fn from(tool: &ModelToolDefinition) -> Self {
+        Self {
+            r#type: "function",
+            function: OpenAiCompatibleFunctionDefinition {
+                name: tool.name.clone(),
+                description: tool.description.clone(),
+                parameters: tool.input_schema.clone(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiCompatibleFunctionDefinition {
+    name: String,
+    description: String,
+    parameters: Value,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiCompatibleToolCall {
+    id: String,
+    r#type: &'static str,
+    function: OpenAiCompatibleFunctionCall,
+}
+
+impl From<&ModelToolCall> for OpenAiCompatibleToolCall {
+    fn from(call: &ModelToolCall) -> Self {
+        Self {
+            id: call.id.clone(),
+            r#type: "function",
+            function: OpenAiCompatibleFunctionCall {
+                name: call.name.clone(),
+                arguments: call.arguments.to_string(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OpenAiCompatibleFunctionCall {
+    name: String,
+    arguments: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCompatibleResponse {
+    choices: Vec<OpenAiCompatibleChoice>,
+    #[serde(default)]
+    usage: OpenAiCompatibleUsage,
+}
+
+impl OpenAiCompatibleResponse {
+    fn into_model_response(self, fallback_model: ModelId) -> Result<ModelResponse, ModelError> {
+        let choice = self
+            .choices
+            .into_iter()
+            .next()
+            .ok_or_else(|| ModelError::Provider("provider returned no choices".to_owned()))?;
+        let tool_calls = choice
+            .message
+            .tool_calls
+            .unwrap_or_default()
+            .into_iter()
+            .map(OpenAiCompatibleToolCallResponse::into_model_tool_call)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(ModelResponse {
+            model: fallback_model,
+            message: ChatMessage::assistant_with_tool_calls(
+                choice.message.content.unwrap_or_default(),
+                tool_calls.clone(),
+            ),
+            tool_calls,
+            usage: Usage {
+                input_tokens: self.usage.prompt_tokens,
+                output_tokens: self.usage.completion_tokens,
+            },
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCompatibleChoice {
+    message: OpenAiCompatibleResponseMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCompatibleResponseMessage {
+    content: Option<String>,
+    tool_calls: Option<Vec<OpenAiCompatibleToolCallResponse>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCompatibleToolCallResponse {
+    id: String,
+    function: OpenAiCompatibleFunctionCall,
+}
+
+impl OpenAiCompatibleToolCallResponse {
+    fn into_model_tool_call(self) -> Result<ModelToolCall, ModelError> {
+        let arguments = serde_json::from_str(&self.function.arguments).map_err(|error| {
+            ModelError::Provider(format!("invalid tool call arguments from provider: {error}"))
+        })?;
+        Ok(ModelToolCall {
+            id: self.id,
+            name: self.function.name,
+            arguments,
+        })
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct OpenAiCompatibleUsage {
+    #[serde(default)]
+    prompt_tokens: u64,
+    #[serde(default)]
+    completion_tokens: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use serde_json::json;
+    use serde_json::{json, to_value};
 
     use super::{
         ChatMessage, MessageRole, MockModelProvider, ModelProvider, ModelRequest, ModelToolCall,
-        ModelToolDefinition, ProviderRegistry,
+        ModelToolDefinition, OpenAiCompatibleProvider, OpenAiCompatibleRequest,
+        OpenAiCompatibleResponse, ProviderRegistry,
     };
 
     #[tokio::test]
@@ -354,5 +644,82 @@ mod tests {
         assert_eq!(message.name.as_deref(), Some("echo"));
         assert_eq!(call.arguments["value"], 42);
         assert_eq!(definition.input_schema["type"], "object");
+    }
+
+    #[test]
+    fn openai_compatible_request_preserves_tool_history() {
+        let call = ModelToolCall {
+            id: "call-1".to_owned(),
+            name: "echo".to_owned(),
+            arguments: json!({ "value": 42 }),
+        };
+        let request = ModelRequest {
+            model: "example-model".into(),
+            messages: vec![
+                ChatMessage::new(MessageRole::User, "hello"),
+                ChatMessage::assistant_with_tool_calls("", vec![call.clone()]),
+                ChatMessage::tool("echo", "call-1", "{\"value\":42}"),
+            ],
+            tools: vec![ModelToolDefinition {
+                name: "echo".to_owned(),
+                description: "echoes input".to_owned(),
+                input_schema: json!({ "type": "object" }),
+            }],
+            temperature: None,
+            max_output_tokens: None,
+        };
+
+        let value = to_value(OpenAiCompatibleRequest::from(&request))
+            .expect("request should serialize");
+
+        assert_eq!(value["tools"][0]["function"]["name"], "echo");
+        assert_eq!(
+            value["messages"][1]["tool_calls"][0]["function"]["arguments"],
+            "{\"value\":42}"
+        );
+        assert_eq!(value["messages"][2]["tool_call_id"], "call-1");
+    }
+
+    #[test]
+    fn openai_compatible_response_extracts_tool_calls() {
+        let response: OpenAiCompatibleResponse = serde_json::from_value(json!({
+            "choices": [{
+                "message": {
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call-1",
+                        "function": {
+                            "name": "echo",
+                            "arguments": "{\"value\":42}"
+                        }
+                    }]
+                }
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 2
+            }
+        }))
+        .expect("response fixture should deserialize");
+
+        let result = response
+            .into_model_response("example-model".into())
+            .expect("response should map");
+
+        assert_eq!(result.tool_calls[0].name, "echo");
+        assert_eq!(result.message.tool_calls[0].id, "call-1");
+        assert_eq!(result.usage.input_tokens, 10);
+    }
+
+    #[test]
+    fn openai_compatible_provider_builds_normalized_endpoint() {
+        let provider = OpenAiCompatibleProvider::new(
+            "compatible",
+            "https://example.com/v1/",
+            "test-key",
+        )
+        .expect("provider should be valid");
+
+        assert_eq!(provider.endpoint(), "https://example.com/v1/chat/completions");
     }
 }
