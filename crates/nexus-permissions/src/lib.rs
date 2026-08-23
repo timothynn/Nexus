@@ -21,7 +21,9 @@ pub struct PermissionRequest {
 impl PermissionRequest {
     #[must_use]
     pub fn new(action: impl Into<String>) -> Self {
-        Self { action: action.into() }
+        Self {
+            action: action.into(),
+        }
     }
 }
 
@@ -47,7 +49,10 @@ pub struct RuleBasedPolicy {
 impl RuleBasedPolicy {
     #[must_use]
     pub fn new(default: PermissionDecision) -> Self {
-        Self { default, rules: HashMap::new() }
+        Self {
+            default,
+            rules: HashMap::new(),
+        }
     }
 
     #[must_use]
@@ -67,6 +72,7 @@ impl PermissionPolicy for RuleBasedPolicy {
             .iter()
             .filter_map(|(rule, decision)| {
                 rule.strip_suffix(".*")
+                    .map(|prefix| format!("{prefix}."))
                     .filter(|prefix| request.action.starts_with(prefix))
                     .map(|prefix| (prefix.len(), *decision))
             })
@@ -99,7 +105,10 @@ pub fn enforce(
 
 #[cfg(test)]
 mod tests {
-    use super::{enforce, PermissionDecision, PermissionError, PermissionPolicy, PermissionRequest, RuleBasedPolicy};
+    use super::{
+        PermissionDecision, PermissionError, PermissionPolicy, PermissionRequest, RuleBasedPolicy,
+        enforce,
+    };
 
     #[test]
     fn exact_rule_wins_over_default() {
