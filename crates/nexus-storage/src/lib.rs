@@ -85,7 +85,7 @@ impl SessionStore for SqliteStore {
         let connection = self.connection.lock().map_err(|_| StorageError::Backend("SQLite mutex poisoned".to_owned()))?;
         connection.execute(
             "INSERT OR IGNORE INTO sessions(id, created_at_ms) VALUES (?1, ?2)",
-            params![id.to_string(), now_ms().to_string()],
+            params![id.0.to_string(), now_ms().to_string()],
         ).map_err(|error| StorageError::Backend(error.to_string()))?;
         Ok(())
     }
