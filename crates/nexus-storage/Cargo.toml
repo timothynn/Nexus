@@ -1,0 +1,15 @@
+[package]
+name = "nexus-storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+nexus-core = { path = "../nexus-core" }
+
+[lints]
+workspace = true
