@@ -30,6 +30,27 @@ export OPENAI_API_KEY="..."
 nexus run --provider openai-compatible --model "your-model-id" --tools --session "inspect this repository"
 ```
 
+## Multi-agent orchestration
+
+Run independent agents in isolated worktrees:
+
+```bash
+nexus agents run "inspect this repository" 3 --concurrency 2 --tools
+```
+
+Or execute a dependency-aware graph. Task syntax is `task:dependency1,dependency2`:
+
+```bash
+nexus agents graph \
+  research \
+  implement:research \
+  tests:implement \
+  review:tests \
+  --concurrency 2 --tools
+```
+
+Nexus executes dependency layers, collects typed worker handoffs, then runs a supervisor and reviewer without automatically merging changes.
+
 ## Embed Nexus in Rust
 
 Nexus now has a small public SDK facade for embedding the harness into another Rust application:
@@ -49,7 +70,7 @@ let result = nexus.run(RunRequest::new("inspect this repository")).await?;
 println!("{}", result.message);
 ```
 
-The SDK intentionally starts small: builder-based configuration, provider/model injection, cancellable execution, and access to the advanced runtime seam. More specialized features remain available through the lower-level crates.
+The SDK intentionally starts small: builder-based configuration, provider/model injection, cancellable execution, and access to the advanced runtime seam.
 
 # 🟢 What's Working Now
 
@@ -85,7 +106,7 @@ Task Graph → Dependency Layers → Parallel Workers
                        Explicit Human Review
 ```
 
-Implemented: isolated worktrees, bounded concurrency, deterministic results, task graphs, unified coordination, cancellation fan-out, worker/supervisor/reviewer handoffs, cleanup policies, review candidates, explicit merge boundaries, and a container workspace execution foundation.
+Implemented: isolated worktrees, bounded concurrency, deterministic results, task graphs, unified coordination, cancellation fan-out, worker/supervisor/reviewer handoffs, cleanup policies, review candidates, explicit merge boundaries, container execution foundation, and a CLI graph operator surface.
 
 ## Phase 4 — Extensibility 🚧
 
@@ -115,17 +136,11 @@ Project plugins live under:
 .nexus/plugins/<name>/plugin.toml
 ```
 
-Each manifest declares its entrypoint and explicit capabilities, such as filesystem access, shell execution, network access, model access, workspace management, and session access. Nexus can therefore reject capability escalation instead of treating plugins as implicitly trusted code.
+Each manifest declares its entrypoint and explicit capabilities, such as filesystem access, shell execution, network access, model access, workspace management, and session access.
 
 ### Public SDK foundation
 
-`nexus-sdk` is the stable embedding facade for applications that want to construct and run Nexus without coupling directly to the CLI. The initial API provides:
-
-- Builder-based configuration
-- Provider injection
-- Model selection
-- Cancellable run requests
-- Access to the advanced runtime seam
+`nexus-sdk` is the stable embedding facade for applications that want to construct and run Nexus without coupling directly to the CLI.
 
 # 🧬 Architecture
 
@@ -163,7 +178,7 @@ crates/
 - [x] Permission-controlled hook execution seam
 - [x] Plugin manifests and capability boundaries
 - [x] Public SDK foundation
-- [ ] CLI integration for unified multi-agent orchestration
+- [x] CLI integration for unified multi-agent orchestration
 - [ ] Run-level observability across parallel workers
 - [ ] Container lifecycle management
 - [ ] Plugin runtime loading and capability enforcement
