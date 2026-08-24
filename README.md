@@ -76,20 +76,18 @@ Includes bounded concurrency, deterministic task layers, cancellation fan-out, c
 
 ## Phase 4 — Extensibility + Isolation 🚧
 
-### Interactive TUI + live runtime events
+### Interactive TUI: events + command dispatch + cancellation
 
-`nexus-tui` is now a dedicated terminal operator surface consuming the same typed `AgentEvent` stream emitted by Nexus orchestration:
+`nexus-tui` is now a dedicated terminal operator surface with a bidirectional runtime bridge:
 
 ```text
-MultiAgentCoordinator / Scheduler
-              ↓
-        AgentEventSink
-              ↓
-          channel bridge
-              ↓
-          nexus-tui
-              ↓
-  live operator event timeline
+Nexus runtime events ───────→ TUI timeline
+                                  ↓
+Operator command input ────→ command bridge
+                                  ↓
+                             runtime boundary
+                                  ↑
+Cancel control ────────────→ shared cancellation path
 ```
 
 Current operator controls:
@@ -97,11 +95,12 @@ Current operator controls:
 - `Tab` cycles focus
 - `←` / `→` switches workspace tabs
 - `↑` / `↓` inspects the event timeline
-- command input records queued operator commands
+- `Enter` dispatches the command input through the runtime bridge
+- `c` requests cancellation outside command mode
 - `Esc` leaves command input
 - `q` exits
 
-The TUI remains intentionally thin: it consumes runtime events rather than recreating orchestration. The next increment is a command-dispatch adapter for launching and cancelling real runs from the console.
+The TUI remains intentionally thin: it uses Nexus event contracts and a runtime command boundary rather than recreating orchestration inside the UI.
 
 ### MCP
 
@@ -176,7 +175,7 @@ crates/
 - [x] Plugin runtime loading and capability enforcement
 - [x] Interactive TUI foundation
 - [x] Live runtime/event stream binding for the TUI
-- [ ] TUI command dispatch and cancellation controls
+- [x] TUI command dispatch and cancellation controls
 - [ ] Tauri desktop application
 - [ ] Remote workers
 
