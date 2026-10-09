@@ -12,7 +12,11 @@ nexus-config = { path = "../nexus-config" }
 nexus-models = { path = "../nexus-models" }
 nexus-runtime = { path = "../nexus-runtime" }
 thiserror.workspace = true
+tokio.workspace = true
 tokio-util.workspace = true
+
+[dev-dependencies]
+nexus-models = { path = "../nexus-models" }
 
 [lints]
 workspace = true

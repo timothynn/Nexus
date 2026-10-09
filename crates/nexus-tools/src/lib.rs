@@ -1,7 +1,7 @@
 //! Tool contracts, registry primitives, and built-in local tools.
 
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::Entry},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -9,7 +9,7 @@ use std::{
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::{process::Command, time::timeout};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,13 +283,14 @@ impl Tool for ShellTool {
             .input
             .get("args")
             .map(|args| {
-                args
-                    .as_array()
+                args.as_array()
                     .ok_or_else(|| ToolError::InvalidInput("`args` must be an array".to_owned()))?
                     .iter()
                     .map(|argument| {
                         argument.as_str().map(str::to_owned).ok_or_else(|| {
-                            ToolError::InvalidInput("every `args` entry must be a string".to_owned())
+                            ToolError::InvalidInput(
+                                "every `args` entry must be a string".to_owned(),
+                            )
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()
@@ -417,11 +418,8 @@ mod tests {
     #[tokio::test]
     async fn shell_tool_rejects_timeouts_above_policy_limit() {
         let root = std::env::current_dir().expect("current directory should exist");
-        let tool = ShellTool::with_timeouts(
-            root,
-            Duration::from_millis(10),
-            Duration::from_millis(20),
-        );
+        let tool =
+            ShellTool::with_timeouts(root, Duration::from_millis(10), Duration::from_millis(20));
         let error = tool
             .execute(ToolRequest {
                 input: json!({

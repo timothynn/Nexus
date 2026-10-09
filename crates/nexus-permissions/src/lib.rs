@@ -109,7 +109,9 @@ pub fn enforce(
         PermissionDecision::Allow => Ok(PermissionDecision::Allow),
         PermissionDecision::Ask => Err(PermissionError::ApprovalRequired(request.action.clone())),
         PermissionDecision::Deny => Err(PermissionError::Denied(request.action.clone())),
-        PermissionDecision::Sandbox => Err(PermissionError::SandboxRequired(request.action.clone())),
+        PermissionDecision::Sandbox => {
+            Err(PermissionError::SandboxRequired(request.action.clone()))
+        }
     }
 }
 
@@ -126,15 +128,17 @@ pub fn enforce_with_approver(
             None => Err(PermissionError::ApprovalRequired(request.action.clone())),
         },
         PermissionDecision::Deny => Err(PermissionError::Denied(request.action.clone())),
-        PermissionDecision::Sandbox => Err(PermissionError::SandboxRequired(request.action.clone())),
+        PermissionDecision::Sandbox => {
+            Err(PermissionError::SandboxRequired(request.action.clone()))
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        PermissionApprover, PermissionDecision, PermissionError, PermissionPolicy, PermissionRequest,
-        RuleBasedPolicy, enforce, enforce_with_approver,
+        PermissionApprover, PermissionDecision, PermissionError, PermissionPolicy,
+        PermissionRequest, RuleBasedPolicy, enforce, enforce_with_approver,
     };
 
     struct StaticApprover(bool);

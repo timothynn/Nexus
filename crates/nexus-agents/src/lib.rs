@@ -6,7 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
 use nexus_workspace::{AgentWorkspace, GitWorktreeManager, WorkspaceError};
 use tokio_util::sync::CancellationToken;
 
@@ -28,15 +28,40 @@ pub struct AgentHandoff {
 /// Structured, run-level observability events emitted by schedulers and coordinators.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentEvent {
-    RunStarted { run_name: String },
-    LayerStarted { tasks: Vec<String> },
-    WorkerStarted { task_id: String, agent_index: usize, workspace: String },
-    WorkerCompleted { task_id: String, agent_index: usize },
-    WorkerFailed { task_id: String, agent_index: usize, error: String },
-    RoleStarted { role: AgentRole, task_id: String },
-    RoleCompleted { role: AgentRole, task_id: String },
-    RunCompleted { run_name: String },
-    RunCancelled { run_name: String },
+    RunStarted {
+        run_name: String,
+    },
+    LayerStarted {
+        tasks: Vec<String>,
+    },
+    WorkerStarted {
+        task_id: String,
+        agent_index: usize,
+        workspace: String,
+    },
+    WorkerCompleted {
+        task_id: String,
+        agent_index: usize,
+    },
+    WorkerFailed {
+        task_id: String,
+        agent_index: usize,
+        error: String,
+    },
+    RoleStarted {
+        role: AgentRole,
+        task_id: String,
+    },
+    RoleCompleted {
+        role: AgentRole,
+        task_id: String,
+    },
+    RunCompleted {
+        run_name: String,
+    },
+    RunCancelled {
+        run_name: String,
+    },
 }
 
 pub trait AgentEventSink: Send + Sync {
@@ -116,7 +141,7 @@ impl ParallelAgentScheduler {
                     },
                 );
                 let summary = tokio::select! {
-                    _ = cancellation.cancelled() => Err(AgentError::Cancelled),
+                    () = cancellation.cancelled() => Err(AgentError::Cancelled),
                     result = job.run(workspace.clone(), cancellation.child_token()) => result,
                 };
                 match summary {
@@ -128,7 +153,11 @@ impl ParallelAgentScheduler {
                                 agent_index,
                             },
                         );
-                        Ok(AgentOutcome { agent_index, workspace, summary })
+                        Ok(AgentOutcome {
+                            agent_index,
+                            workspace,
+                            summary,
+                        })
                     }
                     Err(error) => {
                         record_event(
@@ -243,6 +272,7 @@ pub struct AgentPlan {
     pub instructions: String,
 }
 
+#[must_use]
 pub fn build_supervisor_review_plan(
     tasks: &[TaskNode],
     supervisor_instructions: &str,
@@ -312,52 +342,40 @@ impl MultiAgentCoordinator {
         manager: &GitWorktreeManager,
         run_name: &str,
         base: Option<&str>,
-        worker: Arc<dyn AgentJob>,
-        supervisor: Arc<dyn RoleRunner>,
-        reviewer: Arc<dyn RoleRunner>,
+        runners: GraphRunners,
         cancellation: CancellationToken,
     ) -> Result<OrchestrationResult, AgentError> {
         let layers = graph.layers()?;
         let mut handoffs = Vec::new();
-        record_event(
-            self.events.as_deref(),
-            AgentEvent::RunStarted {
-                run_name: run_name.to_owned(),
-            },
-        );
+        self.emit(AgentEvent::RunStarted {
+            run_name: run_name.to_owned(),
+        });
 
         for layer in layers {
             if cancellation.is_cancelled() {
-                record_event(
-                    self.events.as_deref(),
-                    AgentEvent::RunCancelled {
-                        run_name: run_name.to_owned(),
-                    },
-                );
+                self.emit(AgentEvent::RunCancelled {
+                    run_name: run_name.to_owned(),
+                });
                 return Err(AgentError::Cancelled);
             }
-            record_event(
-                self.events.as_deref(),
-                AgentEvent::LayerStarted {
-                    tasks: layer.clone(),
-                },
-            );
+            self.emit(AgentEvent::LayerStarted {
+                tasks: layer.clone(),
+            });
             let layer_name = format!(
                 "{run_name}-{}",
                 layer.first().cloned().unwrap_or_else(|| "layer".to_owned())
             );
-            let scheduler = if let Some(events) = &self.events {
-                ParallelAgentScheduler::new(self.max_concurrency).with_event_sink(Arc::clone(events))
-            } else {
-                ParallelAgentScheduler::new(self.max_concurrency)
-            };
+            let mut scheduler = ParallelAgentScheduler::new(self.max_concurrency);
+            if let Some(events) = &self.events {
+                scheduler = scheduler.with_event_sink(Arc::clone(events));
+            }
             let outcomes = scheduler
                 .execute(
                     manager,
                     &layer_name,
                     layer.len(),
                     base,
-                    Arc::clone(&worker),
+                    Arc::clone(&runners.worker),
                     cancellation.child_token(),
                 )
                 .await?;
@@ -371,88 +389,94 @@ impl MultiAgentCoordinator {
             }
         }
 
-        let supervisor_workspace = handoffs
+        let workspace = handoffs
             .first()
             .map(|handoff| handoff.workspace.clone())
             .ok_or(AgentError::EmptyGraph)?;
-        let supervisor_plan = AgentPlan {
-            role: AgentRole::Supervisor,
-            task_id: "supervisor".to_owned(),
-            instructions: "Aggregate worker handoffs, resolve conflicts, and produce an implementation plan."
-                .to_owned(),
-        };
-        record_event(
-            self.events.as_deref(),
-            AgentEvent::RoleStarted {
-                role: AgentRole::Supervisor,
-                task_id: supervisor_plan.task_id.clone(),
-            },
-        );
-        let supervisor_summary = supervisor
-            .run(
-                supervisor_plan,
+        let supervisor = self
+            .run_role(
+                runners.supervisor.as_ref(),
+                AgentRole::Supervisor,
+                "Aggregate worker handoffs, resolve conflicts, and produce an implementation plan.",
                 handoffs.clone(),
-                cancellation.child_token(),
+                workspace.clone(),
+                &cancellation,
             )
             .await?;
-        record_event(
-            self.events.as_deref(),
-            AgentEvent::RoleCompleted {
-                role: AgentRole::Supervisor,
-                task_id: "supervisor".to_owned(),
-            },
-        );
-        let supervisor_handoff = AgentHandoff {
-            from: AgentRole::Supervisor,
-            task_id: "supervisor".to_owned(),
-            summary: supervisor_summary,
-            workspace: supervisor_workspace.clone(),
-        };
-
-        let reviewer_plan = AgentPlan {
-            role: AgentRole::Reviewer,
-            task_id: "reviewer".to_owned(),
-            instructions: "Review worker and supervisor output for correctness, regressions, and unmet requirements. Do not merge changes."
-                .to_owned(),
-        };
-        record_event(
-            self.events.as_deref(),
-            AgentEvent::RoleStarted {
-                role: AgentRole::Reviewer,
-                task_id: reviewer_plan.task_id.clone(),
-            },
-        );
-        let reviewer_summary = reviewer
-            .run(
-                reviewer_plan,
-                [handoffs.clone(), vec![supervisor_handoff.clone()]].concat(),
-                cancellation.child_token(),
+        let reviewer = self
+            .run_role(
+                runners.reviewer.as_ref(),
+                AgentRole::Reviewer,
+                "Review worker and supervisor output for correctness, regressions, and unmet requirements. Do not merge changes.",
+                [handoffs.clone(), vec![supervisor.clone()]].concat(),
+                workspace,
+                &cancellation,
             )
             .await?;
-        record_event(
-            self.events.as_deref(),
-            AgentEvent::RoleCompleted {
-                role: AgentRole::Reviewer,
-                task_id: "reviewer".to_owned(),
-            },
-        );
-        let reviewer_handoff = AgentHandoff {
-            from: AgentRole::Reviewer,
-            task_id: "reviewer".to_owned(),
-            summary: reviewer_summary,
-            workspace: supervisor_workspace,
-        };
-        record_event(
-            self.events.as_deref(),
-            AgentEvent::RunCompleted {
-                run_name: run_name.to_owned(),
-            },
-        );
+        self.emit(AgentEvent::RunCompleted {
+            run_name: run_name.to_owned(),
+        });
         Ok(OrchestrationResult {
             workers: handoffs,
-            supervisor: supervisor_handoff,
-            reviewer: reviewer_handoff,
+            supervisor,
+            reviewer,
         })
+    }
+
+    async fn run_role(
+        &self,
+        runner: &dyn RoleRunner,
+        role: AgentRole,
+        instructions: &str,
+        handoffs: Vec<AgentHandoff>,
+        workspace: AgentWorkspace,
+        cancellation: &CancellationToken,
+    ) -> Result<AgentHandoff, AgentError> {
+        let task_id = role.task_id().to_owned();
+        let plan = AgentPlan {
+            role,
+            task_id: task_id.clone(),
+            instructions: instructions.to_owned(),
+        };
+        self.emit(AgentEvent::RoleStarted {
+            role,
+            task_id: task_id.clone(),
+        });
+        let summary = runner
+            .run(plan, handoffs, cancellation.child_token())
+            .await?;
+        self.emit(AgentEvent::RoleCompleted {
+            role,
+            task_id: task_id.clone(),
+        });
+        Ok(AgentHandoff {
+            from: role,
+            task_id,
+            summary,
+            workspace,
+        })
+    }
+
+    fn emit(&self, event: AgentEvent) {
+        record_event(self.events.as_deref(), event);
+    }
+}
+
+/// The three role implementations a graph run needs.
+pub struct GraphRunners {
+    pub worker: Arc<dyn AgentJob>,
+    pub supervisor: Arc<dyn RoleRunner>,
+    pub reviewer: Arc<dyn RoleRunner>,
+}
+
+impl AgentRole {
+    #[must_use]
+    pub const fn task_id(self) -> &'static str {
+        match self {
+            Self::Worker => "worker",
+            Self::Supervisor => "supervisor",
+            Self::Reviewer => "reviewer",
+        }
     }
 }
 
@@ -510,7 +534,9 @@ mod tests {
     #[test]
     fn recording_sink_is_shareable() {
         let sink = Arc::new(RecordingSink(Mutex::new(Vec::new())));
-        sink.record(AgentEvent::RunStarted { run_name: "test".into() });
+        sink.record(AgentEvent::RunStarted {
+            run_name: "test".into(),
+        });
         assert_eq!(sink.0.lock().expect("sink lock").len(), 1);
     }
 }

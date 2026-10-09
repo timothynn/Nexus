@@ -8,15 +8,37 @@ use std::{
 };
 
 use async_trait::async_trait;
-use nexus_permissions::{enforce, PermissionError, PermissionPolicy, PermissionRequest};
+use nexus_permissions::{PermissionError, PermissionPolicy, PermissionRequest, enforce};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Skill {
     pub name: String,
+    pub description: String,
     pub path: PathBuf,
     pub instructions: String,
+}
+
+/// Extracts a one-line description from `description:` frontmatter or the first prose line.
+#[must_use]
+pub fn skill_description(instructions: &str) -> String {
+    let mut lines = instructions.lines().map(str::trim);
+    if instructions.trim_start().starts_with("---") {
+        lines.next();
+        for line in lines.by_ref() {
+            if line == "---" {
+                break;
+            }
+            if let Some(value) = line.strip_prefix("description:") {
+                return value.trim().trim_matches('"').to_owned();
+            }
+        }
+    }
+    lines
+        .find(|line| !line.is_empty() && !line.starts_with('#') && *line != "---")
+        .unwrap_or_default()
+        .to_owned()
 }
 
 pub fn discover_skills(root: impl AsRef<Path>) -> Result<Vec<Skill>, SkillError> {
@@ -34,9 +56,11 @@ pub fn discover_skills(root: impl AsRef<Path>) -> Result<Vec<Skill>, SkillError>
         if !path.is_file() {
             continue;
         }
+        let instructions = fs::read_to_string(&path).map_err(SkillError::Io)?;
         skills.push(Skill {
             name: entry.file_name().to_string_lossy().to_string(),
-            instructions: fs::read_to_string(&path).map_err(SkillError::Io)?,
+            description: skill_description(&instructions),
+            instructions,
             path,
         });
     }
@@ -117,7 +141,10 @@ pub struct PermissionedHookRunner {
 impl PermissionedHookRunner {
     #[must_use]
     pub fn new(root: impl Into<PathBuf>, policy: Arc<dyn PermissionPolicy>) -> Self {
-        Self { root: root.into(), policy }
+        Self {
+            root: root.into(),
+            policy,
+        }
     }
 }
 
@@ -168,8 +195,15 @@ pub struct AgentTemplate {
     pub skills: Vec<String>,
 }
 
-pub fn load_agent_template(root: impl AsRef<Path>, name: &str) -> Result<AgentTemplate, SkillError> {
-    let path = root.as_ref().join(".nexus").join("agents").join(format!("{name}.toml"));
+pub fn load_agent_template(
+    root: impl AsRef<Path>,
+    name: &str,
+) -> Result<AgentTemplate, SkillError> {
+    let path = root
+        .as_ref()
+        .join(".nexus")
+        .join("agents")
+        .join(format!("{name}.toml"));
     if !path.exists() {
         return Err(SkillError::TemplateNotFound(name.to_owned()));
     }
@@ -192,10 +226,28 @@ pub enum SkillError {
 
 #[cfg(test)]
 mod tests {
-    use super::{HookConfig, HookEvent};
+    use super::{HookConfig, HookEvent, skill_description};
+
+    #[test]
+    fn description_prefers_frontmatter() {
+        let skill = "---\nname: tdd\ndescription: Test first\n---\n# TDD\nBody";
+        assert_eq!(skill_description(skill), "Test first");
+    }
+
+    #[test]
+    fn description_falls_back_to_first_prose_line() {
+        assert_eq!(
+            skill_description("# Title\n\nDo the thing.\nMore"),
+            "Do the thing."
+        );
+    }
 
     #[test]
     fn missing_hook_returns_empty_command_list() {
-        assert!(HookConfig::default().commands(HookEvent::BeforeTool).is_empty());
+        assert!(
+            HookConfig::default()
+                .commands(HookEvent::BeforeTool)
+                .is_empty()
+        );
     }
 }

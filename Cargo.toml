@@ -17,6 +17,7 @@ members = [
   "crates/nexus-runtime",
   "crates/nexus-storage",
   "crates/nexus-workspace",
+  "crates/nexus-teams",
 ]
 
 [workspace.package]
@@ -52,4 +53,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
-pedantic = "warn"
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"

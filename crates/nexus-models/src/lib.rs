@@ -31,6 +31,7 @@ impl From<String> for ModelId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)] // Independent capability flags, not a state machine.
 pub struct ModelCapabilities {
     pub chat: bool,
     pub streaming: bool,
@@ -248,6 +249,34 @@ impl ProviderRegistry {
         let mut names = self.providers.keys().cloned().collect::<Vec<_>>();
         names.sort();
         names
+    }
+}
+
+/// Provider names accepted by [`provider_from_name`].
+pub const PROVIDER_NAMES: [&str; 2] = ["mock", "openai-compatible"];
+
+/// Builds a provider by name, reading API keys from `api_key_env`.
+pub fn provider_from_name(
+    name: &str,
+    base_url: &str,
+    api_key_env: &str,
+) -> Result<Arc<dyn ModelProvider>, ModelError> {
+    match name {
+        "mock" => Ok(Arc::new(MockModelProvider::default())),
+        "openai-compatible" => {
+            let api_key = std::env::var(api_key_env).map_err(|_| {
+                ModelError::Provider(format!(
+                    "missing API key environment variable `{api_key_env}` for provider `{name}`"
+                ))
+            })?;
+            Ok(Arc::new(OpenAiCompatibleProvider::new(
+                name, base_url, api_key,
+            )?))
+        }
+        other => Err(ModelError::NotFound(format!(
+            "provider `{other}`; supported providers: {}",
+            PROVIDER_NAMES.join(", ")
+        ))),
     }
 }
 
@@ -573,7 +602,9 @@ struct OpenAiCompatibleToolCallResponse {
 impl OpenAiCompatibleToolCallResponse {
     fn into_model_tool_call(self) -> Result<ModelToolCall, ModelError> {
         let arguments = serde_json::from_str(&self.function.arguments).map_err(|error| {
-            ModelError::Provider(format!("invalid tool call arguments from provider: {error}"))
+            ModelError::Provider(format!(
+                "invalid tool call arguments from provider: {error}"
+            ))
         })?;
         Ok(ModelToolCall {
             id: self.id,
@@ -616,16 +647,28 @@ mod tests {
     }
 
     #[test]
+    fn providers_are_built_by_name() {
+        assert_eq!(
+            super::provider_from_name("mock", "", "UNUSED")
+                .expect("mock")
+                .name(),
+            "mock"
+        );
+        assert!(super::provider_from_name("nope", "", "UNUSED").is_err());
+        assert!(
+            super::provider_from_name("openai-compatible", "https://x", "NEXUS_TEST_MISSING_KEY")
+                .is_err()
+        );
+    }
+
+    #[test]
     fn registry_resolves_registered_provider() {
         let mut registry = ProviderRegistry::new();
         registry.register(Arc::new(MockModelProvider::default()));
 
         assert_eq!(registry.names(), vec!["mock"]);
         assert_eq!(
-            registry
-                .get("mock")
-                .expect("provider should exist")
-                .name(),
+            registry.get("mock").expect("provider should exist").name(),
             "mock"
         );
     }
@@ -673,8 +716,8 @@ mod tests {
             max_output_tokens: None,
         };
 
-        let value = to_value(OpenAiCompatibleRequest::from(&request))
-            .expect("request should serialize");
+        let value =
+            to_value(OpenAiCompatibleRequest::from(&request)).expect("request should serialize");
 
         assert_eq!(value["tools"][0]["function"]["name"], "echo");
         assert_eq!(
@@ -717,13 +760,13 @@ mod tests {
 
     #[test]
     fn openai_compatible_provider_builds_normalized_endpoint() {
-        let provider = OpenAiCompatibleProvider::new(
-            "compatible",
-            "https://example.com/v1/",
-            "test-key",
-        )
-        .expect("provider should be valid");
+        let provider =
+            OpenAiCompatibleProvider::new("compatible", "https://example.com/v1/", "test-key")
+                .expect("provider should be valid");
 
-        assert_eq!(provider.endpoint(), "https://example.com/v1/chat/completions");
+        assert_eq!(
+            provider.endpoint(),
+            "https://example.com/v1/chat/completions"
+        );
     }
 }
