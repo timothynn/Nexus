@@ -1,6 +1,9 @@
 //! Configuration contracts and layered resolution for Nexus.
 
-use std::{env, fs, path::{Path, PathBuf}};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -34,11 +37,21 @@ impl Default for ContextConfig {
     }
 }
 
-fn default_agent_name() -> String { "nexus-engineer".to_owned() }
-const fn default_max_steps() -> usize { 16 }
-const fn default_context_files() -> usize { 64 }
-const fn default_context_bytes() -> usize { 64 * 1024 }
-const fn default_context_tokens() -> usize { 24_000 }
+fn default_agent_name() -> String {
+    "nexus-engineer".to_owned()
+}
+const fn default_max_steps() -> usize {
+    16
+}
+const fn default_context_files() -> usize {
+    64
+}
+const fn default_context_bytes() -> usize {
+    64 * 1024
+}
+const fn default_context_tokens() -> usize {
+    24_000
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -66,19 +79,29 @@ impl Config {
             let path = home.join("nexus").join("config.toml");
             merge_file(&mut config, &mut sources, &path)?;
         }
-        merge_file(&mut config, &mut sources, &root.join(".nexus").join("config.toml"))?;
+        merge_file(
+            &mut config,
+            &mut sources,
+            &root.join(".nexus").join("config.toml"),
+        )?;
 
         if let Ok(value) = env::var("NEXUS_DEFAULT_AGENT") {
             config.default_agent = value;
         }
         if let Ok(value) = env::var("NEXUS_MAX_STEPS") {
-            config.max_steps = value.parse().map_err(|_| ConfigError::InvalidEnv("NEXUS_MAX_STEPS".to_owned()))?;
+            config.max_steps = value
+                .parse()
+                .map_err(|_| ConfigError::InvalidEnv("NEXUS_MAX_STEPS".to_owned()))?;
         }
         Ok(ResolvedConfig { config, sources })
     }
 }
 
-fn merge_file(config: &mut Config, sources: &mut Vec<PathBuf>, path: &Path) -> Result<(), ConfigError> {
+fn merge_file(
+    config: &mut Config,
+    sources: &mut Vec<PathBuf>,
+    path: &Path,
+) -> Result<(), ConfigError> {
     if !path.exists() {
         return Ok(());
     }

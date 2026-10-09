@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Nexus Teams operator console"
 
 [[bin]]
 name = "nexus-tui"
@@ -12,10 +13,14 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+clap.workspace = true
 crossterm.workspace = true
 ratatui.workspace = true
-nexus-agents = { path = "../../crates/nexus-agents" }
+tokio.workspace = true
+nexus-config = { path = "../../crates/nexus-config" }
+nexus-models = { path = "../../crates/nexus-models" }
 nexus-storage = { path = "../../crates/nexus-storage" }
+nexus-teams = { path = "../../crates/nexus-teams" }
 
 [lints]
 workspace = true

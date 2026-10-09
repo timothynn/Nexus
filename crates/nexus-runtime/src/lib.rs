@@ -7,7 +7,7 @@ use nexus_config::Config;
 use nexus_core::Task;
 use nexus_models::{
     ChatMessage, MessageRole, ModelError, ModelId, ModelProvider, ModelRequest, ModelResponse,
-    ModelStreamEvent, ModelToolDefinition, Usage,
+    ModelStreamEvent, ModelToolCall, ModelToolDefinition, Usage,
 };
 use nexus_permissions::{
     PermissionApprover, PermissionError, PermissionPolicy, PermissionRequest, enforce_with_approver,
@@ -43,7 +43,11 @@ pub struct AgentRuntime {
 
 impl AgentRuntime {
     #[must_use]
-    pub fn new(config: Config, provider: Arc<dyn ModelProvider>, model: impl Into<ModelId>) -> Self {
+    pub fn new(
+        config: Config,
+        provider: Arc<dyn ModelProvider>,
+        model: impl Into<ModelId>,
+    ) -> Self {
         Self {
             config,
             provider,
@@ -105,14 +109,8 @@ impl AgentRuntime {
         executor: &AuthorizedToolExecutor,
         max_steps: usize,
     ) -> Result<RunResult, RuntimeError> {
-        self.run_with_tools_controlled(
-            prompt,
-            executor,
-            max_steps,
-            CancellationToken::new(),
-            None,
-        )
-        .await
+        self.run_with_tools_controlled(prompt, executor, max_steps, CancellationToken::new(), None)
+            .await
     }
 
     /// Bounded tool loop with cooperative cancellation and structured audit events.
@@ -189,7 +187,7 @@ impl AgentRuntime {
                 serde_json::json!({"step": step, "messages": request.messages.len()}),
             );
             let response = tokio::select! {
-                _ = cancellation.cancelled() => {
+                () = cancellation.cancelled() => {
                     record(audit, "run.cancelled", serde_json::json!({"step": step, "during": "model"}));
                     return Err(RuntimeError::Cancelled);
                 }
@@ -212,48 +210,7 @@ impl AgentRuntime {
             }
             messages.push(response.message);
             for call in response.tool_calls {
-                if cancellation.is_cancelled() {
-                    record(
-                        audit,
-                        "run.cancelled",
-                        serde_json::json!({"step": step, "during": "tool"}),
-                    );
-                    return Err(RuntimeError::Cancelled);
-                }
-                record(
-                    audit,
-                    "tool.requested",
-                    serde_json::json!({"id": call.id, "name": call.name, "arguments": call.arguments}),
-                );
-                let output = tokio::select! {
-                    _ = cancellation.cancelled() => {
-                        record(audit, "run.cancelled", serde_json::json!({"step": step, "during": "tool"}));
-                        return Err(RuntimeError::Cancelled);
-                    }
-                    output = executor.execute(&call.name, ToolRequest { input: call.arguments }) => output,
-                };
-                match output {
-                    Ok(output) => {
-                        record(
-                            audit,
-                            "tool.completed",
-                            serde_json::json!({"id": call.id, "name": call.name, "output": output.output}),
-                        );
-                        messages.push(ChatMessage::tool(
-                            call.name,
-                            call.id,
-                            serde_json::to_string(&output.output)?,
-                        ));
-                    }
-                    Err(error) => {
-                        record(
-                            audit,
-                            "tool.failed",
-                            serde_json::json!({"id": call.id, "name": call.name, "error": error.to_string()}),
-                        );
-                        return Err(error);
-                    }
-                }
+                messages.push(execute_tool_call(executor, call, step, &cancellation, audit).await?);
             }
         }
         record(
@@ -276,6 +233,58 @@ impl AgentRuntime {
             model: response.model.0,
             message: response.message.content,
             usage: response.usage,
+        }
+    }
+}
+
+/// Runs one model-requested tool call through permissions, recording its audit trail.
+async fn execute_tool_call(
+    executor: &AuthorizedToolExecutor,
+    call: ModelToolCall,
+    step: usize,
+    cancellation: &CancellationToken,
+    audit: Option<&dyn AuditSink>,
+) -> Result<ChatMessage, RuntimeError> {
+    if cancellation.is_cancelled() {
+        record(
+            audit,
+            "run.cancelled",
+            serde_json::json!({"step": step, "during": "tool"}),
+        );
+        return Err(RuntimeError::Cancelled);
+    }
+    record(
+        audit,
+        "tool.requested",
+        serde_json::json!({"id": call.id, "name": call.name, "arguments": call.arguments}),
+    );
+    let output = tokio::select! {
+        () = cancellation.cancelled() => {
+            record(audit, "run.cancelled", serde_json::json!({"step": step, "during": "tool"}));
+            return Err(RuntimeError::Cancelled);
+        }
+        output = executor.execute(&call.name, ToolRequest { input: call.arguments }) => output,
+    };
+    match output {
+        Ok(output) => {
+            record(
+                audit,
+                "tool.completed",
+                serde_json::json!({"id": call.id, "name": call.name, "output": output.output}),
+            );
+            Ok(ChatMessage::tool(
+                call.name,
+                call.id,
+                serde_json::to_string(&output.output)?,
+            ))
+        }
+        Err(error) => {
+            record(
+                audit,
+                "tool.failed",
+                serde_json::json!({"id": call.id, "name": call.name, "error": error.to_string()}),
+            );
+            Err(error)
         }
     }
 }

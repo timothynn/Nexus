@@ -1,0 +1,29 @@
+[package]
+name = "nexus-teams"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Teams of collaborating bots: channels, missions, floor control, and task boards"
+
+[dependencies]
+async-trait.workspace = true
+futures-util.workspace = true
+nexus-config = { path = "../nexus-config" }
+nexus-context = { path = "../nexus-context" }
+nexus-models = { path = "../nexus-models" }
+nexus-permissions = { path = "../nexus-permissions" }
+nexus-runtime = { path = "../nexus-runtime" }
+nexus-storage = { path = "../nexus-storage" }
+nexus-tools = { path = "../nexus-tools" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+toml.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

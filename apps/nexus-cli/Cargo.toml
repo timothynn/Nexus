@@ -29,6 +29,7 @@ nexus-permissions = { path = "../../crates/nexus-permissions" }
 nexus-runtime = { path = "../../crates/nexus-runtime" }
 nexus-skills = { path = "../../crates/nexus-skills" }
 nexus-storage = { path = "../../crates/nexus-storage" }
+nexus-teams = { path = "../../crates/nexus-teams" }
 nexus-tools = { path = "../../crates/nexus-tools" }
 nexus-workspace = { path = "../../crates/nexus-workspace" }
 

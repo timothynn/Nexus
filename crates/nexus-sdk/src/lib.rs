@@ -30,7 +30,7 @@ impl Nexus {
         }
 
         tokio::select! {
-            _ = request.cancellation.cancelled() => Err(SdkError::Cancelled),
+            () = request.cancellation.cancelled() => Err(SdkError::Cancelled),
             result = self.runtime.run(&request.prompt) => result.map_err(SdkError::Runtime),
         }
     }
@@ -43,20 +43,11 @@ impl Nexus {
 }
 
 /// Builder for [`Nexus`].
+#[derive(Default)]
 pub struct NexusBuilder {
     config: Config,
     provider: Option<Arc<dyn ModelProvider>>,
     model: Option<ModelId>,
-}
-
-impl Default for NexusBuilder {
-    fn default() -> Self {
-        Self {
-            config: Config::default(),
-            provider: None,
-            model: None,
-        }
-    }
 }
 
 impl NexusBuilder {

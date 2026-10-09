@@ -1,39 +1,36 @@
-use std::{
-    env,
-    fs,
-    io::{self, Write},
-    path::PathBuf,
-    sync::Arc,
-};
+// Command-line flag structs are naturally bool-heavy.
+#![allow(clippy::struct_excessive_bools)]
 
-use anyhow::{bail, Context, Result};
-use async_trait::async_trait;
+mod agents_cmd;
+mod chat;
+mod mission_cmd;
+mod support;
+mod teams_cmd;
+
+use std::{env, path::Path, path::PathBuf, process::Command as Process};
+
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
-use nexus_agents::{
-    AgentError, AgentHandoff, AgentJob, AgentPlan, AgentRole, MultiAgentCoordinator,
-    OrchestrationResult, ParallelAgentScheduler, RoleRunner, TaskGraph, TaskNode,
-};
 use nexus_config::Config;
 use nexus_context::{
     CodeIndex, ContextOptions, discover, discover_git_aware, discover_instructions,
 };
-use nexus_core::SessionId;
 use nexus_mcp::{McpServerCommand, StdioMcpClient};
-use nexus_models::{
-    MockModelProvider, ModelProvider, ModelStreamEvent, OpenAiCompatibleProvider,
-};
-use nexus_permissions::{
-    PermissionApprover, PermissionDecision, PermissionRequest, RuleBasedPolicy,
-};
-use nexus_runtime::{AgentRuntime, AuditEvent, AuditSink, AuthorizedToolExecutor};
-use nexus_skills::{
-    HookEvent, discover_skills, load_agent_template, load_hooks, load_skill,
-};
-use nexus_storage::{SessionStore, SqliteStore};
-use nexus_tools::{FileSystemTool, ShellTool, ToolRegistry};
-use nexus_workspace::{AgentWorkspace, GitWorktreeManager};
+use nexus_models::ModelStreamEvent;
+use nexus_runtime::AgentRuntime;
+use nexus_skills::{HookEvent, discover_skills, load_agent_template, load_hooks, load_skill};
+use nexus_workspace::GitWorktreeManager;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
+
+use crate::{
+    agents_cmd::AgentsCommand,
+    support::{
+        Approval, ProviderArgs, WORKSPACE_TOOLS, build_tool_executor, resolved_instructions,
+        session_store,
+    },
+    teams_cmd::{BotsCommand, TeamCommand},
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "nexus", version, about = "A configurable AI agent harness")]
@@ -44,35 +41,13 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    Run {
-        task: String,
-        #[arg(short, long)]
-        stream: bool,
-        #[arg(short, long, default_value = "mock-1")]
-        model: String,
-        #[arg(long, default_value = "mock")]
-        provider: String,
-        #[arg(long, default_value = "https://api.openai.com/v1")]
-        base_url: String,
-        #[arg(long, default_value = "OPENAI_API_KEY")]
-        api_key_env: String,
-        #[arg(long)]
-        tools: bool,
-        #[arg(long)]
-        max_steps: Option<usize>,
-        #[arg(long)]
-        yes: bool,
-        #[arg(long)]
-        session: bool,
-        #[arg(long)]
-        git_context: bool,
-        #[arg(long)]
-        agent_template: Option<String>,
-        #[arg(long = "skill")]
-        skills: Vec<String>,
-    },
+    /// Run a single agent task.
+    Run(Box<RunArgs>),
+    /// List supported model providers.
     Models,
+    /// Print the resolved configuration.
     Config,
+    /// Inspect repository context selection.
     Context {
         #[arg(long)]
         max_files: Option<usize>,
@@ -80,14 +55,14 @@ enum Command {
         token_budget: Option<usize>,
         #[arg(long)]
         git_aware: bool,
-        #[arg(long)]
-        model: Option<String>,
     },
+    /// Search the local code index.
     Search {
         query: String,
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Print composed instructions for a path.
     Instructions {
         #[arg(default_value = ".")]
         path: PathBuf,
@@ -100,16 +75,50 @@ enum Command {
         #[command(subcommand)]
         command: McpCommand,
     },
+    /// Parallel and graph-orchestrated agents in isolated worktrees.
     Agents {
         #[command(subcommand)]
         command: AgentsCommand,
     },
+    /// Manage bots (team members).
+    Bots {
+        #[command(subcommand)]
+        command: BotsCommand,
+    },
+    /// Build teams of bots and run them toward goals.
+    Team {
+        #[command(subcommand)]
+        command: TeamCommand,
+    },
+    /// Replay a persisted event stream.
     Replay { session_id: String },
+    /// Check the local environment.
     Doctor,
     Worktree {
         #[command(subcommand)]
         command: WorktreeCommand,
     },
+}
+
+#[derive(Debug, clap::Args)]
+struct RunArgs {
+    task: String,
+    #[arg(short, long)]
+    stream: bool,
+    #[command(flatten)]
+    provider: ProviderArgs,
+    #[arg(long)]
+    tools: bool,
+    #[arg(long)]
+    max_steps: Option<usize>,
+    #[arg(long)]
+    yes: bool,
+    #[arg(long)]
+    git_context: bool,
+    #[arg(long)]
+    agent_template: Option<String>,
+    #[arg(long = "skill")]
+    skills: Vec<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -137,241 +146,366 @@ enum McpCommand {
 }
 
 #[derive(Debug, Subcommand)]
-enum AgentsCommand {
-    Run {
-        task: String,
-        count: usize,
-        #[arg(long, default_value_t = 2)]
-        concurrency: usize,
-        #[arg(long)]
-        base: Option<String>,
-        #[arg(long, default_value = "mock-1")]
-        model: String,
-        #[arg(long, default_value = "mock")]
-        provider: String,
-        #[arg(long, default_value = "https://api.openai.com/v1")]
-        base_url: String,
-        #[arg(long, default_value = "OPENAI_API_KEY")]
-        api_key_env: String,
-        #[arg(long)]
-        tools: bool,
-        #[arg(long)]
-        yes: bool,
-        #[arg(long)]
-        max_steps: Option<usize>,
-    },
-    /// Execute a dependency-aware worker → supervisor → reviewer graph.
-    Graph {
-        /// Task IDs, optionally with dependencies: implement:research,tests:implement
-        tasks: Vec<String>,
-        #[arg(long, default_value_t = 2)]
-        concurrency: usize,
-        #[arg(long)]
-        base: Option<String>,
-        #[arg(long, default_value = "mock-1")]
-        model: String,
-        #[arg(long, default_value = "mock")]
-        provider: String,
-        #[arg(long, default_value = "https://api.openai.com/v1")]
-        base_url: String,
-        #[arg(long, default_value = "OPENAI_API_KEY")]
-        api_key_env: String,
-        #[arg(long)]
-        tools: bool,
-        #[arg(long)]
-        yes: bool,
-        #[arg(long)]
-        max_steps: Option<usize>,
-    },
-}
-
-#[derive(Debug, Subcommand)]
 enum WorktreeCommand {
-    Create { name: String, #[arg(long)] base: Option<String> },
+    Create {
+        name: String,
+        #[arg(long)]
+        base: Option<String>,
+    },
     List,
-    Status { name: String },
-    Diff { name: String },
-    Remove { name: String, #[arg(long)] force: bool },
-    AllocateAgents { run_name: String, count: usize, #[arg(long)] base: Option<String> },
-}
-
-struct StdinApprover;
-impl PermissionApprover for StdinApprover {
-    fn approve(&self, request: &PermissionRequest) -> bool {
-        eprint!("[nexus] allow `{}`? [y/N] ", request.action);
-        if io::stderr().flush().is_err() { return false; }
-        let mut answer = String::new();
-        match io::stdin().read_line(&mut answer) {
-            Ok(_) => matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes"),
-            Err(_) => false,
-        }
-    }
-}
-
-struct ApproveAll;
-impl PermissionApprover for ApproveAll { fn approve(&self, _request: &PermissionRequest) -> bool { true } }
-
-fn build_provider(provider_name: &str, base_url: &str, api_key_env: &str) -> Result<Arc<dyn ModelProvider>> {
-    match provider_name {
-        "mock" => Ok(Arc::new(MockModelProvider::default())),
-        "openai-compatible" => {
-            let api_key = env::var(api_key_env).with_context(|| format!("missing API key environment variable `{api_key_env}` for the selected provider"))?;
-            Ok(Arc::new(OpenAiCompatibleProvider::new("openai-compatible", base_url, api_key)?))
-        }
-        _ => bail!("unknown provider `{provider_name}`; supported providers: mock, openai-compatible"),
-    }
-}
-
-fn build_tool_executor(root: PathBuf, yes: bool) -> Result<AuthorizedToolExecutor> {
-    let mut registry = ToolRegistry::new();
-    registry.register(Arc::new(FileSystemTool::new(root.clone())))?;
-    registry.register(Arc::new(ShellTool::new(root)))?;
-    let policy = RuleBasedPolicy::new(PermissionDecision::Deny)
-        .with_rule("filesystem.read", PermissionDecision::Allow)
-        .with_rule("shell.execute", PermissionDecision::Ask);
-    let executor = AuthorizedToolExecutor::new(registry, Arc::new(policy));
-    Ok(if yes { executor.with_approver(Arc::new(ApproveAll)) } else { executor.with_approver(Arc::new(StdinApprover)) })
-}
-
-fn session_store(root: &PathBuf) -> Result<Arc<SqliteStore>> {
-    let directory = root.join(".nexus");
-    fs::create_dir_all(&directory)?;
-    Ok(Arc::new(SqliteStore::open(directory.join("nexus.db"))?))
-}
-
-fn resolved_instructions(root: &PathBuf, target: &PathBuf, agent_template: Option<&str>, skill_names: &[String], git_context: bool) -> Result<String> {
-    let mut template_instructions = None;
-    let mut selected_skills = skill_names.to_vec();
-    if let Some(template_name) = agent_template {
-        let template = load_agent_template(root, template_name)?;
-        template_instructions = Some(template.instructions);
-        selected_skills.extend(template.skills);
-    }
-    selected_skills.sort(); selected_skills.dedup();
-    let mut instruction_set = discover_instructions(root, target, template_instructions)?;
-    for name in selected_skills {
-        let skill = load_skill(root, &name)?;
-        instruction_set.documents.push(nexus_context::InstructionDocument { path: skill.path.strip_prefix(root).unwrap_or(&skill.path).to_path_buf(), content: format!("# Skill: {}\n{}", skill.name, skill.instructions) });
-    }
-    let mut combined = instruction_set.combined();
-    if git_context {
-        let snapshot = discover_git_aware(root, &ContextOptions::default())?;
-        let files = snapshot.prioritized_files.iter().map(|path| path.display().to_string()).collect::<Vec<_>>();
-        if !files.is_empty() { combined.push_str("\n\n## Git-aware priority\nPrioritize these changed or untracked files when investigating the task:\n"); combined.push_str(&files.join("\n")); }
-    }
-    Ok(combined)
-}
-
-struct RuntimeAgentJob {
-    config: Config, model: String, provider: String, base_url: String, api_key_env: String,
-    task: String, tools: bool, yes: bool, max_steps: usize,
-}
-
-#[async_trait]
-impl AgentJob for RuntimeAgentJob {
-    async fn run(&self, workspace: AgentWorkspace, cancellation: CancellationToken) -> Result<String, AgentError> {
-        let provider = build_provider(&self.provider, &self.base_url, &self.api_key_env).map_err(|error| AgentError::Execution(error.to_string()))?;
-        let runtime = AgentRuntime::new(self.config.clone(), provider, self.model.clone());
-        if !self.tools {
-            return runtime.run(&self.task).await.map(|result| result.message).map_err(|error| AgentError::Execution(error.to_string()));
-        }
-        let executor = build_tool_executor(workspace.worktree.path.clone(), self.yes).map_err(|error| AgentError::Execution(error.to_string()))?;
-        let instructions = resolved_instructions(&workspace.worktree.path, &workspace.worktree.path, None, &[], true).map_err(|error| AgentError::Execution(error.to_string()))?;
-        runtime.run_with_tools_controlled_with_instructions(&self.task, Some(&instructions), &executor, self.max_steps, cancellation, None).await.map(|result| result.message).map_err(|error| AgentError::Execution(error.to_string()))
-    }
-}
-
-struct RuntimeRoleRunner { config: Config, model: String, provider: String, base_url: String, api_key_env: String }
-#[async_trait]
-impl RoleRunner for RuntimeRoleRunner {
-    async fn run(&self, plan: AgentPlan, handoffs: Vec<AgentHandoff>, cancellation: CancellationToken) -> Result<String, AgentError> {
-        if cancellation.is_cancelled() { return Err(AgentError::Cancelled); }
-        let provider = build_provider(&self.provider, &self.base_url, &self.api_key_env).map_err(|error| AgentError::Execution(error.to_string()))?;
-        let runtime = AgentRuntime::new(self.config.clone(), provider, self.model.clone());
-        let context = handoffs.iter().map(|handoff| format!("## {:?}: {}\n{}", handoff.from, handoff.task_id, handoff.summary)).collect::<Vec<_>>().join("\n\n");
-        let prompt = format!("{}\n\n# Role\n{:?}\n# Task\n{}\n\n# Handoffs\n{}", plan.instructions, plan.role, plan.task_id, context);
-        runtime.run(&prompt).await.map(|result| result.message).map_err(|error| AgentError::Execution(error.to_string()))
-    }
-}
-
-fn parse_graph_tasks(tasks: &[String]) -> Result<TaskGraph> {
-    if tasks.is_empty() { bail!("provide at least one graph task"); }
-    let nodes = tasks.iter().map(|spec| {
-        let (id, dependencies) = spec.split_once(':').map_or((spec.as_str(), ""), |(id, dependencies)| (id, dependencies));
-        let id = id.trim();
-        if id.is_empty() { bail!("graph task IDs cannot be empty"); }
-        let depends_on = dependencies.split(',').filter_map(|dependency| { let dependency = dependency.trim(); (!dependency.is_empty()).then(|| dependency.to_owned()) }).collect();
-        Ok(TaskNode { id: id.to_owned(), depends_on })
-    }).collect::<Result<Vec<_>>>()?;
-    Ok(TaskGraph { tasks: nodes })
-}
-
-fn print_orchestration(result: OrchestrationResult) {
-    println!("workers:");
-    for handoff in result.workers { println!("  - {} [{}]: {}", handoff.task_id, handoff.workspace.worktree.name, handoff.summary); }
-    println!("supervisor: {}", result.supervisor.summary);
-    println!("reviewer: {}", result.reviewer.summary);
-}
-
-fn hook_event(name: &str) -> Option<HookEvent> {
-    match name { "run_started" => Some(HookEvent::RunStarted), "before_model" => Some(HookEvent::BeforeModel), "before_tool" => Some(HookEvent::BeforeTool), "after_tool" => Some(HookEvent::AfterTool), "run_completed" => Some(HookEvent::RunCompleted), "run_failed" => Some(HookEvent::RunFailed), _ => None }
+    Status {
+        name: String,
+    },
+    Diff {
+        name: String,
+    },
+    /// Show the status and diff a human must review before merging.
+    Review {
+        name: String,
+    },
+    /// Merge a reviewed worktree branch into the current branch.
+    Merge {
+        name: String,
+        /// Required: confirms a human reviewed the changes.
+        #[arg(long)]
+        approve: bool,
+    },
+    Remove {
+        name: String,
+        #[arg(long)]
+        force: bool,
+    },
+    AllocateAgents {
+        run_name: String,
+        count: usize,
+        #[arg(long)]
+        base: Option<String>,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt().with_env_filter(EnvFilter::from_default_env()).with_target(false).init();
-    let cli = Cli::parse(); let root = env::current_dir()?;
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_target(false)
+        .init();
+    let cli = Cli::parse();
+    let root = env::current_dir()?;
     match cli.command {
-        Some(Command::Agents { command: AgentsCommand::Graph { tasks, concurrency, base, model, provider, base_url, api_key_env, tools, yes, max_steps } }) => {
-            let resolved = Config::load_from(&root)?;
-            let max_steps = max_steps.unwrap_or(resolved.config.max_steps);
-            let graph = parse_graph_tasks(&tasks)?;
-            let manager = GitWorktreeManager::new(&root)?;
-            let run_name = format!("graph-{}", SessionId::new().0);
-            let worker = Arc::new(RuntimeAgentJob { config: resolved.config.clone(), model: model.clone(), provider: provider.clone(), base_url: base_url.clone(), api_key_env: api_key_env.clone(), task: "Execute the assigned graph task in this isolated workspace and return a concise handoff.".to_owned(), tools, yes, max_steps });
-            let role_runner = Arc::new(RuntimeRoleRunner { config: resolved.config, model, provider, base_url, api_key_env });
-            let cancellation = CancellationToken::new();
-            let coordinator = MultiAgentCoordinator::new(concurrency);
-            let result = coordinator.execute_graph(&graph, &manager, &run_name, base.as_deref(), worker, Arc::clone(&role_runner), role_runner, cancellation).await?;
-            print_orchestration(result);
+        Some(Command::Run(args)) => run_task(&root, *args).await,
+        Some(Command::Agents { command }) => agents_cmd::run(&root, command).await,
+        Some(Command::Bots { command }) => teams_cmd::run_bots(&root, command),
+        Some(Command::Team { command }) => teams_cmd::run_team(&root, command).await,
+        Some(Command::Skills { command }) => skills(&root, command),
+        Some(Command::Mcp { command }) => mcp(command).await,
+        Some(Command::Worktree { command }) => worktree(&root, command),
+        Some(command) => inspect(&root, command),
+        None => {
+            println!("Nexus: use `nexus --help` to inspect available commands.");
+            Ok(())
         }
-        Some(Command::Agents { command: AgentsCommand::Run { task, count, concurrency, base, model, provider, base_url, api_key_env, tools, yes, max_steps } }) => {
-            let resolved = Config::load_from(&root)?;
-            let max_steps = max_steps.unwrap_or(resolved.config.max_steps);
-            let manager = GitWorktreeManager::new(&root)?;
-            let run_name = format!("agents-{}", SessionId::new().0);
-            let job = Arc::new(RuntimeAgentJob { config: resolved.config, model, provider, base_url, api_key_env, task, tools, yes, max_steps });
-            let outcomes = ParallelAgentScheduler::new(concurrency).execute(&manager, &run_name, count, base.as_deref(), job, CancellationToken::new()).await?;
-            for outcome in outcomes { println!("agent {} [{}]: {}", outcome.agent_index + 1, outcome.workspace.worktree.name, outcome.summary); }
-        }
-        Some(Command::Run { task, stream, model, provider, base_url, api_key_env, tools, max_steps, yes, session: _, git_context, agent_template, skills }) => {
-            if stream && tools { bail!("streaming with model-driven tool execution is not implemented yet"); }
-            let resolved = Config::load_from(&root)?; let step_limit = max_steps.unwrap_or(resolved.config.max_steps);
-            let model_provider = build_provider(&provider, &base_url, &api_key_env)?; let runtime = AgentRuntime::new(resolved.config, model_provider, model);
-            if tools {
-                let executor = build_tool_executor(root.clone(), yes)?;
-                let instructions = resolved_instructions(&root, &root, agent_template.as_deref(), &skills, git_context)?;
-                let result = runtime.run_with_tools_controlled_with_instructions(&task, Some(&instructions), &executor, step_limit, CancellationToken::new(), None).await?;
-                println!("{}", result.message);
-            } else if stream {
-                let result = runtime.run_streaming(&task, |event| { if let ModelStreamEvent::Delta { content } = event { print!("{content}"); } }).await?; println!(); eprintln!("\n[usage] input={} output={} total={}", result.usage.input_tokens, result.usage.output_tokens, result.usage.total_tokens);
-            } else { println!("{}", runtime.run(&task).await?.message); }
-        }
-        Some(Command::Models) => println!("mock\nopenai-compatible"),
-        Some(Command::Config) => { let resolved = Config::load_from(&root)?; println!("{:#?}", resolved.config); }
-        Some(Command::Context { max_files, token_budget, git_aware, model: _ }) => { let mut options = ContextOptions::default(); if let Some(max_files) = max_files { options.max_files = max_files; } if let Some(token_budget) = token_budget { options.token_budget = token_budget; } let snapshot = if git_aware { discover_git_aware(&root, &options)? } else { discover(&root, &options)? }; println!("files={} estimated_tokens={} truncated={}", snapshot.files.len(), snapshot.estimated_tokens, snapshot.truncated); }
-        Some(Command::Search { query, limit }) => { let index = CodeIndex::build(&root, &ContextOptions::default())?; for result in index.search(&query, limit) { println!("{}:{}", result.path.display(), result.score); } }
-        Some(Command::Instructions { path }) => println!("{}", discover_instructions(&root, &path, None)?.combined()),
-        Some(Command::Skills { command: SkillsCommand::List }) => for skill in discover_skills(&root)? { println!("{}\t{}", skill.name, skill.description); },
-        Some(Command::Skills { command: SkillsCommand::Show { name } }) => { let skill = load_skill(&root, &name)?; println!("{}", skill.instructions); }
-        Some(Command::Skills { command: SkillsCommand::Template { name } }) => println!("{:#?}", load_agent_template(&root, &name)?),
-        Some(Command::Skills { command: SkillsCommand::Hooks { event } }) => { let hooks = load_hooks(&root)?; if let Some(event) = event.as_deref().and_then(hook_event) { println!("{:#?}", hooks.for_event(event)); } else { println!("{:#?}", hooks); } }
-        Some(Command::Mcp { command: McpCommand::ListTools { program, args } }) => { let mut client = StdioMcpClient::spawn(McpServerCommand { program, args }).await?; println!("{:#?}", client.list_tools().await?); }
-        Some(Command::Mcp { command: McpCommand::Call { program, tool, arguments, args } }) => { let mut client = StdioMcpClient::spawn(McpServerCommand { program, args }).await?; println!("{}", client.call_tool(&tool, serde_json::from_str(&arguments)?).await?); }
-        Some(Command::Replay { session_id }) => { let store = session_store(&root)?; for event in store.replay(&session_id).await? { println!("{:?}", event); } }
-        Some(Command::Doctor) => println!("nexus doctor: workspace={}", root.display()),
-        Some(Command::Worktree { command }) => { let manager = GitWorktreeManager::new(&root)?; match command { WorktreeCommand::Create { name, base } => println!("{}", manager.create(&name, base.as_deref())?.path.display()), WorktreeCommand::List => for worktree in manager.list()? { println!("{}\t{}\t{}", worktree.name, worktree.branch, worktree.path.display()); }, WorktreeCommand::Status { name } => println!("{}", manager.status(&name)?), WorktreeCommand::Diff { name } => println!("{}", manager.diff(&name)?), WorktreeCommand::Remove { name, force } => manager.remove(&name, force)?, WorktreeCommand::AllocateAgents { run_name, count, base } => for workspace in manager.allocate_agents(&run_name, count, base.as_deref())? { println!("{}\t{}", workspace.agent_index + 1, workspace.worktree.path.display()); } } }
-        None => println!("Nexus: use `nexus --help` to inspect available commands."),
+    }
+}
+
+async fn run_task(root: &Path, args: RunArgs) -> Result<()> {
+    if args.stream && args.tools {
+        bail!("streaming with model-driven tool execution is not implemented yet");
+    }
+    let resolved = Config::load_from(root)?;
+    let step_limit = args.max_steps.unwrap_or(resolved.config.max_steps);
+    let runtime = AgentRuntime::new(
+        resolved.config,
+        args.provider.build()?,
+        args.provider.model.clone(),
+    );
+    if args.tools {
+        let approval = if args.yes {
+            Approval::Always
+        } else {
+            Approval::Prompt
+        };
+        let executor = build_tool_executor(root, &WORKSPACE_TOOLS, approval)?;
+        let instructions = resolved_instructions(
+            root,
+            root,
+            args.agent_template.as_deref(),
+            &args.skills,
+            args.git_context,
+        )?;
+        let result = runtime
+            .run_with_tools_controlled_with_instructions(
+                &args.task,
+                Some(&instructions),
+                &executor,
+                step_limit,
+                CancellationToken::new(),
+                None,
+            )
+            .await?;
+        println!("{}", result.message);
+    } else if args.stream {
+        let result = runtime
+            .run_streaming(&args.task, |event| {
+                if let ModelStreamEvent::Delta { content } = event {
+                    print!("{content}");
+                }
+            })
+            .await?;
+        println!();
+        eprintln!(
+            "\n[usage] input={} output={} total={}",
+            result.usage.input_tokens,
+            result.usage.output_tokens,
+            result.usage.input_tokens + result.usage.output_tokens
+        );
+    } else {
+        println!("{}", runtime.run(&args.task).await?.message);
     }
     Ok(())
+}
+
+fn inspect(root: &Path, command: Command) -> Result<()> {
+    match command {
+        Command::Models => println!("mock\nopenai-compatible"),
+        Command::Config => println!("{:#?}", Config::load_from(root)?.config),
+        Command::Context {
+            max_files,
+            token_budget,
+            git_aware,
+        } => {
+            let mut options = ContextOptions::default();
+            if let Some(max_files) = max_files {
+                options.max_files = max_files;
+            }
+            if let Some(token_budget) = token_budget {
+                options.token_budget = token_budget;
+            }
+            let (snapshot, prioritized) = if git_aware {
+                let aware = discover_git_aware(root, &options)?;
+                (aware.snapshot, aware.prioritized_files)
+            } else {
+                (discover(root, &options)?, Vec::new())
+            };
+            println!(
+                "files={} estimated_tokens={} truncated={} prioritized={}",
+                snapshot.files.len(),
+                snapshot.total_estimated_tokens,
+                snapshot.truncated,
+                prioritized.len()
+            );
+        }
+        Command::Search { query, limit } => {
+            let index = CodeIndex::build(&discover(root, &ContextOptions::default())?);
+            for result in index.search(&query, limit) {
+                println!(
+                    "{}:{}  [{}] {}",
+                    result.path.display(),
+                    result.line,
+                    result.score,
+                    result.text
+                );
+            }
+        }
+        Command::Instructions { path } => {
+            println!("{}", discover_instructions(root, &path, None)?.combined());
+        }
+        Command::Replay { session_id } => {
+            for event in session_store(root)?.replay(&session_id)? {
+                println!("{} {} {}", event.sequence, event.kind, event.payload);
+            }
+        }
+        Command::Doctor => doctor(root),
+        _ => unreachable!("dispatched in main"),
+    }
+    Ok(())
+}
+
+fn doctor(root: &Path) {
+    let check = |label: &str, ok: bool, detail: String| {
+        println!("{} {label:<14} {detail}", if ok { "✔" } else { "✖" });
+    };
+    check("workspace", true, root.display().to_string());
+    let git = Process::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(root)
+        .output();
+    match git {
+        Ok(output) if output.status.success() => check(
+            "git",
+            true,
+            String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        ),
+        _ => check(
+            "git",
+            false,
+            "not a Git repository (worktrees and agents need one)".to_owned(),
+        ),
+    }
+    match Config::load_from(root) {
+        Ok(resolved) => check(
+            "config",
+            true,
+            if resolved.sources.is_empty() {
+                "defaults".to_owned()
+            } else {
+                resolved
+                    .sources
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+        ),
+        Err(error) => check("config", false, error.to_string()),
+    }
+    check(
+        "openai key",
+        env::var_os("OPENAI_API_KEY").is_some(),
+        "OPENAI_API_KEY (needed for --provider openai-compatible)".to_owned(),
+    );
+    let docker = Process::new("docker").arg("--version").output();
+    check(
+        "containers",
+        docker.as_ref().is_ok_and(|output| output.status.success()),
+        docker.ok().map_or_else(
+            || "docker not found".to_owned(),
+            |output| String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        ),
+    );
+    let library = nexus_teams::TeamLibrary::new(root);
+    check(
+        "teams",
+        true,
+        format!(
+            "{} bots, {} teams in .nexus/",
+            library.list_bots().map_or(0, |bots| bots.len()),
+            library.list_teams().map_or(0, |teams| teams.len())
+        ),
+    );
+}
+
+fn skills(root: &Path, command: SkillsCommand) -> Result<()> {
+    match command {
+        SkillsCommand::List => {
+            for skill in discover_skills(root)? {
+                println!("{}\t{}", skill.name, skill.description);
+            }
+        }
+        SkillsCommand::Show { name } => println!("{}", load_skill(root, &name)?.instructions),
+        SkillsCommand::Template { name } => println!("{:#?}", load_agent_template(root, &name)?),
+        SkillsCommand::Hooks { event } => {
+            let hooks = load_hooks(root)?;
+            match event.as_deref().map(|name| hook_event(name).ok_or(name)) {
+                Some(Ok(event)) => println!("{:#?}", hooks.commands(event)),
+                Some(Err(name)) => bail!("unknown hook event `{name}`"),
+                None => println!("{hooks:#?}"),
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn mcp(command: McpCommand) -> Result<()> {
+    match command {
+        McpCommand::ListTools { program, args } => {
+            let mut client = connect_mcp(program, args).await?;
+            println!("{:#?}", client.list_tools().await?);
+            client.shutdown().await?;
+        }
+        McpCommand::Call {
+            program,
+            tool,
+            arguments,
+            args,
+        } => {
+            let mut client = connect_mcp(program, args).await?;
+            println!(
+                "{}",
+                client
+                    .call_tool(&tool, serde_json::from_str(&arguments)?)
+                    .await?
+            );
+            client.shutdown().await?;
+        }
+    }
+    Ok(())
+}
+
+fn worktree(root: &Path, command: WorktreeCommand) -> Result<()> {
+    let manager = GitWorktreeManager::new(root)?;
+    match command {
+        WorktreeCommand::Create { name, base } => {
+            println!("{}", manager.create(&name, base.as_deref())?.path.display());
+        }
+        WorktreeCommand::List => {
+            for worktree in manager.list()? {
+                println!(
+                    "{}\t{}\t{}",
+                    worktree.name,
+                    worktree.branch,
+                    worktree.path.display()
+                );
+            }
+        }
+        WorktreeCommand::Status { name } => println!("{}", manager.status(&name)?),
+        WorktreeCommand::Diff { name } => println!("{}", manager.diff(&name)?),
+        WorktreeCommand::Review { name } => {
+            let candidate = manager.review_candidate(&name)?;
+            println!(
+                "Review {} (branch {})\n\n## Status\n{}\n\n## Diff\n{}",
+                candidate.workspace.name,
+                candidate.workspace.branch,
+                if candidate.status.is_empty() {
+                    "(clean)"
+                } else {
+                    &candidate.status
+                },
+                if candidate.diff.is_empty() {
+                    "(no uncommitted changes)"
+                } else {
+                    &candidate.diff
+                }
+            );
+            println!("\nMerge only after review: nexus worktree merge {name} --approve");
+        }
+        WorktreeCommand::Merge { name, approve } => {
+            manager.merge_after_review(&name, "HEAD", approve)?;
+            println!("merged {name} after explicit approval");
+        }
+        WorktreeCommand::Remove { name, force } => manager.remove(&name, force)?,
+        WorktreeCommand::AllocateAgents {
+            run_name,
+            count,
+            base,
+        } => {
+            for workspace in manager.allocate_agents(&run_name, count, base.as_deref())? {
+                println!(
+                    "{}\t{}",
+                    workspace.agent_index + 1,
+                    workspace.worktree.path.display()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn connect_mcp(program: String, args: Vec<String>) -> Result<StdioMcpClient> {
+    let mut command = McpServerCommand::new(program);
+    command.args = args;
+    let mut client = StdioMcpClient::connect(&command)?;
+    client.initialize("nexus").await?;
+    Ok(client)
+}
+
+fn hook_event(name: &str) -> Option<HookEvent> {
+    match name {
+        "run_started" => Some(HookEvent::RunStarted),
+        "before_model" => Some(HookEvent::BeforeModel),
+        "before_tool" => Some(HookEvent::BeforeTool),
+        "after_tool" => Some(HookEvent::AfterTool),
+        "run_completed" => Some(HookEvent::RunCompleted),
+        "run_failed" => Some(HookEvent::RunFailed),
+        _ => None,
+    }
 }

@@ -62,7 +62,9 @@ pub fn discover_git_aware(
     paths.sort_by(|left, right| {
         let left_changed = changed.contains(left.strip_prefix(&root).unwrap_or(left));
         let right_changed = changed.contains(right.strip_prefix(&root).unwrap_or(right));
-        right_changed.cmp(&left_changed).then_with(|| left.cmp(right))
+        right_changed
+            .cmp(&left_changed)
+            .then_with(|| left.cmp(right))
     });
     let snapshot = build_snapshot(root.clone(), paths, options, None)?;
     let prioritized_files = snapshot
@@ -94,9 +96,10 @@ fn build_snapshot(
             continue;
         }
         let content = String::from_utf8_lossy(&bytes).to_string();
-        let estimated_tokens = model.map_or_else(|| estimate_tokens(&content), |name| {
-            estimate_tokens_for_model(&content, name)
-        });
+        let estimated_tokens = model.map_or_else(
+            || estimate_tokens(&content),
+            |name| estimate_tokens_for_model(&content, name),
+        );
         if total_estimated_tokens.saturating_add(estimated_tokens) > options.token_budget {
             truncated = true;
             break;
@@ -130,16 +133,19 @@ pub fn estimate_tokens_for_model(text: &str, model: &str) -> usize {
     if text.is_empty() {
         return 0;
     }
-    let chars_per_token = if model.contains("gpt") || model.contains("o1") || model.contains("o3") {
-        3.7
+    // Characters per token, in tenths, so the estimate stays in integer arithmetic.
+    let tenths_per_token = if model.contains("gpt") || model.contains("o1") || model.contains("o3")
+    {
+        37
     } else if model.contains("claude") {
-        3.8
-    } else if model.contains("gemini") {
-        4.0
+        38
     } else {
-        4.0
+        40
     };
-    (text.chars().count() as f64 / chars_per_token).ceil() as usize
+    text.chars()
+        .count()
+        .saturating_mul(10)
+        .div_ceil(tenths_per_token)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,7 +166,13 @@ impl InstructionSet {
         let mut sections = self
             .documents
             .iter()
-            .map(|document| format!("## Instructions from {}\n{}", document.path.display(), document.content))
+            .map(|document| {
+                format!(
+                    "## Instructions from {}\n{}",
+                    document.path.display(),
+                    document.content
+                )
+            })
             .collect::<Vec<_>>();
         if let Some(instructions) = &self.agent_instructions {
             if !instructions.trim().is_empty() {
@@ -306,7 +318,10 @@ impl CodeIndex {
             .iter()
             .filter_map(|entry| {
                 let haystack = entry.text.to_ascii_lowercase();
-                let score = terms.iter().filter(|term| haystack.contains(term.as_str())).count();
+                let score = terms
+                    .iter()
+                    .filter(|term| haystack.contains(term.as_str()))
+                    .count();
                 (score > 0).then(|| CodeSearchMatch {
                     path: entry.path.clone(),
                     line: entry.line,
@@ -327,7 +342,11 @@ impl CodeIndex {
     }
 }
 
-fn collect_paths(root: &Path, directory: &Path, paths: &mut Vec<PathBuf>) -> Result<(), ContextError> {
+fn collect_paths(
+    root: &Path,
+    directory: &Path,
+    paths: &mut Vec<PathBuf>,
+) -> Result<(), ContextError> {
     for entry in fs::read_dir(directory).map_err(ContextError::Io)? {
         let entry = entry.map_err(ContextError::Io)?;
         let path = entry.path();
@@ -362,7 +381,9 @@ pub enum ContextError {
 
 #[cfg(test)]
 mod tests {
-    use super::{CodeIndex, ContextFile, ContextSnapshot, estimate_tokens, estimate_tokens_for_model};
+    use super::{
+        CodeIndex, ContextFile, ContextSnapshot, estimate_tokens, estimate_tokens_for_model,
+    };
     use std::path::PathBuf;
 
     #[test]
