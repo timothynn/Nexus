@@ -6,7 +6,7 @@
 
 **Local-first · Model-agnostic · Tool-native · Workspace-isolated · Observable by design**
 
-[**Quick Start**](#-quick-start) · [**Working Now**](#-whats-working-now) · [**Architecture**](#-architecture) · [**Roadmap**](#-roadmap)
+[**Quick Start**](#-quick-start) · [**Nexus Teams**](#-nexus-teams--bots-that-work-together) · [**Working Now**](#-whats-working-now) · [**Architecture**](#-architecture) · [**Roadmap**](#-roadmap)
 
 </div>
 
@@ -23,10 +23,16 @@ cargo build --workspace
 cargo run -p nexus-cli -- run "inspect this repository"
 ```
 
-Launch the interactive operator console:
+Put a team of bots to work on a goal (runs offline with simulated bots by default):
 
 ```bash
-cargo run -p nexus-tui
+cargo run -p nexus-cli -- team run --template software --goal "Add a /healthz endpoint with tests"
+```
+
+Launch the interactive Teams operator console:
+
+```bash
+cargo run -p nexus-tui -- --template research -g "Pick a sync engine for a local-first app"
 ```
 
 ## Multi-agent orchestration
@@ -39,6 +45,78 @@ nexus agents graph \
   review:tests \
   --concurrency 2 --tools
 ```
+
+# 🤝 Nexus Teams — bots that work together
+
+Think Microsoft Teams, except the members are bots. You assemble a team, give it a goal, and the bots plan the work, split it into tasks, talk in channels and direct messages, hand work to each other, and vote on whether the goal is met. You watch, chat with them, answer their questions, and approve or reject the result.
+
+```text
+        you (@human): goal · chat · /dm · /answer · /approve · /reject · /pause · /cancel
+                                          │
+                                          ▼
+ team ─▶ mission engine ─▶ floor policy picks speakers ─▶ bot brains take turns
+              │   ▲                                              │
+              │   └──── mentions · tasks · votes · handoffs ◀────┘  (nexus-actions JSON,
+              │                                                      checked by permissions)
+              ▼
+ append-only event log (SQLite) ─▶ replay · transcript · report · board · resume
+```
+
+## Quick tour
+
+```bash
+nexus team templates                                   # software, research, content, incident, debate
+nexus team show research                               # roster, channels, policy, approval, budget
+nexus team run --template software --goal "Add a /healthz endpoint with tests"
+nexus team run --template incident -i --goal "Checkout latency doubled"   # you sign off with /approve
+nexus team missions                                    # persisted missions, newest first
+nexus team board 3f2a9c1e                              # task board + working notes
+nexus team transcript 3f2a9c1e --format markdown -o mission.md
+nexus team resume 3f2a9c1e --rounds 6 --note "Focus on the failing tests"
+```
+
+Build your own bots and teams:
+
+```bash
+nexus bots archetypes
+nexus bots new nova --archetype engineer --expertise rust,tokio --tool filesystem.read --worktree
+nexus team new core --template software --member nova --approval majority --channel "ops:Deploys and alerts"
+nexus team run core --goal "..." --brain runtime --provider openai-compatible --model <model-id>
+```
+
+## What a team has
+
+| Concept | How it works |
+| --- | --- |
+| **Bots** | Personas with a handle, role, expertise, instructions, tools, model, and permissions. Ten built-in archetypes (lead, architect, engineer, researcher, reviewer, tester, writer, critic, designer, analyst); project bots live in `.nexus/bots/<handle>.toml` and override archetypes of the same name. |
+| **Teams** | A lead, members, channels, approvers, an approval rule, a floor policy, and a budget. Saved in `.nexus/teams/<name>.toml`, started from a template, or assembled ad hoc with `--member pm:lead --member ada:engineer`. |
+| **Channels, DMs, threads** | `#general` plus topic channels (bots can open more), private `dm:a+b` channels between bots or with you, threaded replies, and `@mentions` that route attention. |
+| **Task board** | Tasks with owners, cycle-checked dependencies, and statuses (todo, in progress, blocked, review, done, cancelled). Only the assignee, creator, or lead may update a task, and work starts only once its dependencies are done. |
+| **Floor control** | Who speaks each round: `lead-directed` (default), `round-robin`, `mention-driven`, `broadcast`, or `expertise` routing; turns run sequentially or in parallel. |
+| **Governance** | The lead proposes completion; approvers vote under the `all`, `majority`, or `any` rule, and `human` can be a required approver. Rejections send the team back to work with the reasons attached. |
+| **Bounds** | Round, turn, message, and token budgets; stall detection that nudges the lead before stopping; per-turn and human-response timeouts; pause/resume; Ctrl+C cancellation. |
+| **Safety** | Every bot action is checked by `nexus-permissions` as a `team.*` action (only the lead may propose completion by default; profiles can deny more). Model-backed bots call workspace tools through the permissioned executor. |
+| **Brains** | `simulated` (deterministic and offline; the default with the mock provider) or `runtime` (model-backed through the Nexus agent runtime). Each bot can use its own provider and model. |
+| **Isolation** | Bots with `workspace = "worktree"` get their own Git worktree. Nothing is merged automatically: review with `nexus worktree review <name>` and merge with `nexus worktree merge <name> --approve`. |
+| **Durability** | Every mission is an append-only event stream in `.nexus/nexus.db`, and state is rebuilt by replay. Missions can be listed, replayed, exported (chat, Markdown, JSON), reported on, and resumed with a fresh budget and feedback, including reopening a completed mission with follow-up work. |
+
+## Operator console
+
+Run a mission with `-i` (CLI) or in `nexus-tui`, then type:
+
+```text
+plain text              post to the current channel (mention bots with @handle)
+#channel text           post to another channel
+/dm <bot> <text>        private message to one bot
+/answer <text>          answer a bot's question
+/approve                approve a completion proposal (when @human is an approver)
+/reject [reason]        send the team back to work
+/pause · /resume        hold or continue the mission
+/goal <text>            start a new mission (TUI)
+/cancel                 stop the mission
+```
+
+The design is described in [`docs/specs/nexus-teams.md`](docs/specs/nexus-teams.md), and the domain vocabulary is defined in [`CONTEXT.md`](CONTEXT.md).
 
 # 🟢 What's Working Now
 
@@ -76,31 +154,21 @@ Includes bounded concurrency, deterministic task layers, cancellation fan-out, c
 
 ## Phase 4 — Extensibility + Isolation 🚧
 
-### Interactive TUI: events + command dispatch + cancellation
+### Interactive TUI: the Teams operator console
 
-`nexus-tui` is now a dedicated terminal operator surface with a bidirectional runtime bridge:
+`nexus-tui` is a full-screen, Teams-style console for missions. It shows channels with unread counts, the roster (★ lead, ● speaking), the live conversation with threads, the task board, pending questions and votes, and bot activity. A composer accepts chat and operator commands.
 
-```text
-Nexus runtime events ───────→ TUI timeline
-                                  ↓
-Operator command input ────→ command bridge
-                                  ↓
-                             runtime boundary
-                                  ↑
-Cancel control ────────────→ shared cancellation path
+```bash
+nexus-tui                                    # demo squad; type /goal <what you want>
+nexus-tui --template debate -g "Monorepo or polyrepo?"
+nexus-tui core --brain runtime --provider openai-compatible --model <model-id>
+nexus-tui --replay 3f2a9c1e                  # read-only replay of a persisted mission
+nexus-tui --resume 3f2a9c1e --rounds 6 --note "Tighten the error handling"
 ```
 
-Current operator controls:
+Keys: `Tab`/`Shift+Tab` focus · `↑↓`/`j k` channels and scrolling · `PgUp`/`PgDn`/`End` · `i` or `/` compose · `p` pause/resume · `a` approve · `x` cancel · `F1` help · `q` quit.
 
-- `Tab` cycles focus
-- `←` / `→` switches workspace tabs
-- `↑` / `↓` inspects the event timeline
-- `Enter` dispatches the command input through the runtime bridge
-- `c` requests cancellation outside command mode
-- `Esc` leaves command input
-- `q` exits
-
-The TUI remains intentionally thin: it uses Nexus event contracts and a runtime command boundary rather than recreating orchestration inside the UI.
+The TUI stays thin. It folds the same `TeamEvent` stream that is persisted and replayed, and it sends operator input through `MissionControl` instead of reimplementing orchestration.
 
 ### MCP
 
@@ -153,6 +221,8 @@ crates/
 ├── nexus-mcp/                 MCP client and Tool adapters
 ├── nexus-skills/              Skills, templates, and permissioned hooks
 ├── nexus-plugins/             Plugin discovery, runtime, capabilities, audit
+├── nexus-teams/               Bot teams: roster, channels, task board, floor control,
+│                              governance, mission engine, persistence, templates
 └── nexus-sdk/                 Public embedding API
 ```
 
@@ -178,6 +248,20 @@ crates/
 - [x] TUI command dispatch and cancellation controls
 - [ ] Tauri desktop application
 - [ ] Remote workers
+
+## Nexus Teams
+- [x] Bot archetypes, project bots, teams, and templates
+- [x] Channels, direct messages, threads, mentions, and a shared task board
+- [x] Floor policies and parallel turns
+- [x] Approval governance (all / majority / any, human sign-off)
+- [x] Budgets, stall detection, timeouts, pause/resume, cancellation
+- [x] Event-sourced persistence, replay, transcripts, reports, and resume
+- [x] Model-backed bots with permissioned tools and per-bot worktrees
+- [x] CLI and TUI operator consoles
+- [ ] Bot memory that carries across missions
+- [ ] Teams that delegate sub-goals to other teams
+- [ ] Scheduled and recurring missions
+- [ ] Web dashboard and chat bridges (Slack, Microsoft Teams)
 
 # 🛠️ Development Workflow
 
